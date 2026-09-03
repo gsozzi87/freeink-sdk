@@ -75,14 +75,17 @@
 #ifndef FREEINK_DEVICE_ONEPAGE
 #define FREEINK_DEVICE_ONEPAGE 0
 #endif
+#ifndef FREEINK_DEVICE_WS397
+#define FREEINK_DEVICE_WS397 0
+#endif
 
 // --- 2) Coherence: exactly one MCU family, at least one device ---------------
 #if !(FREEINK_DEVICE_X4 || FREEINK_DEVICE_X3 || FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_X4CLASSIC || FREEINK_DEVICE_M5 || \
       FREEINK_DEVICE_MURPHY || FREEINK_DEVICE_DELINK || FREEINK_DEVICE_LILYGO || FREEINK_DEVICE_M5PAPER ||               \
       FREEINK_DEVICE_STICKY || FREEINK_DEVICE_PAPERMONO || FREEINK_DEVICE_PAPERS3 || FREEINK_DEVICE_MURPHY_M4 ||         \
-      FREEINK_DEVICE_EEGO_A4 || FREEINK_DEVICE_ONEPAGE)
+      FREEINK_DEVICE_EEGO_A4 || FREEINK_DEVICE_ONEPAGE || FREEINK_DEVICE_WS397)
 #error \
-    "FreeInk: no device selected. Pass at least one -DFREEINK_DEVICE_<NAME> (X4, X3, X4PRO, X4CLASSIC, M5, MURPHY, DELINK, LILYGO, M5PAPER, STICKY, PAPERMONO, PAPERS3, MURPHY_M4, EEGO_A4, ONEPAGE) in your build env — see platformio.sample.ini."
+    "FreeInk: no device selected. Pass at least one -DFREEINK_DEVICE_<NAME> (X4, X3, X4PRO, X4CLASSIC, M5, MURPHY, DELINK, LILYGO, M5PAPER, STICKY, PAPERMONO, PAPERS3, MURPHY_M4, EEGO_A4, ONEPAGE, WS397) in your build env — see platformio.sample.ini."
 #endif
 // Each device belongs to one MCU family; a binary targets exactly one. X3/X4 are
 // ESP32-C3; M5 PaperColor/Murphy/de-link/LilyGo are ESP32-S3; M5Paper v1.1 is the
@@ -93,7 +96,7 @@
 #define FREEINK_MCU_S3                                                                                    \
   (FREEINK_DEVICE_M5 || FREEINK_DEVICE_MURPHY || FREEINK_DEVICE_DELINK || FREEINK_DEVICE_LILYGO ||        \
    FREEINK_DEVICE_STICKY || FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_X4CLASSIC || FREEINK_DEVICE_PAPERMONO ||  \
-   FREEINK_DEVICE_PAPERS3 || FREEINK_DEVICE_MURPHY_M4 || FREEINK_DEVICE_EEGO_A4)
+   FREEINK_DEVICE_PAPERS3 || FREEINK_DEVICE_MURPHY_M4 || FREEINK_DEVICE_EEGO_A4 || FREEINK_DEVICE_WS397)
 #define FREEINK_MCU_ESP32 (FREEINK_DEVICE_M5PAPER)
 #if (FREEINK_MCU_C3 + FREEINK_MCU_C61 + FREEINK_MCU_S3 + FREEINK_MCU_ESP32) != 1
 #error \
@@ -108,7 +111,7 @@
 // use SSD1677, UC8179, or UC8279, recovered from OEM firmware and hardware
 // references — see docs/xteink-x4pro-support.md.
 #if FREEINK_DEVICE_X4 || FREEINK_DEVICE_DELINK || FREEINK_DEVICE_STICKY || FREEINK_DEVICE_X4PRO || \
-    FREEINK_DEVICE_X4CLASSIC || FREEINK_DEVICE_MURPHY_M4 || FREEINK_DEVICE_ONEPAGE
+    FREEINK_DEVICE_X4CLASSIC || FREEINK_DEVICE_MURPHY_M4 || FREEINK_DEVICE_ONEPAGE || FREEINK_DEVICE_WS397
 #define FREEINK_DRIVER_SSD1677 1
 #else
 #define FREEINK_DRIVER_SSD1677 0
@@ -266,7 +269,7 @@
 #define FREEINK_CAP_COLOR (FREEINK_DEVICE_M5)
 #endif
 #ifndef FREEINK_CAP_AUDIO
-#define FREEINK_CAP_AUDIO (FREEINK_DEVICE_MURPHY || FREEINK_DEVICE_M5)
+#define FREEINK_CAP_AUDIO (FREEINK_DEVICE_MURPHY || FREEINK_DEVICE_M5 || FREEINK_DEVICE_WS397)
 #endif
 // Microphone capture (PDM in). Separate from FREEINK_CAP_AUDIO (output): the
 // Sticky has a PDM mic but no output codec. The Microphone lib compiles its
@@ -285,7 +288,7 @@
 #define FREEINK_CAP_TEMP_HUMIDITY (FREEINK_DEVICE_STICKY)
 #endif
 #ifndef FREEINK_CAP_IMU
-#define FREEINK_CAP_IMU (FREEINK_DEVICE_X3 || FREEINK_DEVICE_STICKY || FREEINK_DEVICE_X4CLASSIC)
+#define FREEINK_CAP_IMU (FREEINK_DEVICE_X3 || FREEINK_DEVICE_STICKY || FREEINK_DEVICE_X4CLASSIC || FREEINK_DEVICE_WS397)
 #endif
 // LEDC PWM buzzer (tone beeper). The Buzzer lib drives the AudioConfig.buzzer
 // pin; on for boards that wire one (Sticky GPIO48, Murphy GPIO46, PaperS3
@@ -324,7 +327,7 @@
 #ifndef FREEINK_SD_SDMMC
 #define FREEINK_SD_SDMMC                                                                            \
   (FREEINK_DEVICE_DELINK || FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_X4CLASSIC || FREEINK_DEVICE_PAPERMONO || \
-   FREEINK_DEVICE_MURPHY_M4)
+   FREEINK_DEVICE_MURPHY_M4 || FREEINK_DEVICE_WS397)
 #endif
 
 // Serial log transport hint for consumer firmware. Boards can share the same MCU
@@ -381,6 +384,7 @@ enum class Board : uint8_t {
   M5PaperS3,  // ESP32-S3 sibling of M5Paper v1.1: same ED047TC1 glass, no IT8951 — raw parallel via LovyanGFX
   EegoA4,     // EEGO Reader A4: ESP32-S3, UC8279C 768x552 SPI panel, GSLX680 touch, PCF8563 RTC
   OnePage,    // OnePage: ESP32-C61, SSD1677 800x480 SPI panel, 4-key ADC ladder + 3 side keys
+  WS397,      // Waveshare ESP32-S3-ePaper-3.97: SSD1677 800x480, ES8311+NS4150B audio, 3 keys + BOOT
 };
 
 // How the board reports button presses.
@@ -1749,10 +1753,69 @@ static_assert(ONEPAGE.displayWidth / 8 * ONEPAGE.displayHeight == 48000,
 // build gets exactly that panel's size. Adding a device adds one term here — no
 // device names leak into the display code.
 constexpr uint32_t cmax(uint32_t a, uint32_t b) { return a > b ? a : b; }
+
+// ---------------------------------------------------------------------------
+// Waveshare ESP32-S3-ePaper-3.97 ("ws397"). SSD1677 800x480 (same glass class
+// as X4 / de-link / Sticky), ESP32-S3-WROOM-1-N16R8. Pins recovered from the
+// vendor firmware (waveshareteam/ESP32-S3-ePaper-3.97: Arduino DEV_Config.h,
+// ESP-IDF button/es8311/qmi8658 BSPs) and the schematic's assignment table.
+// Audio out is real: ES8311 codec + NS4150B class-D amp driving the bundled
+// 8ohm/1W speaker; PA enable on GPIO39. CAVEATS: GPIO39 doubles as the
+// QMI8658 INT1 in the vendor schematic (amp-enable wins here; IMU runs
+// polled). Mic is I2S via the ES8311 (not PDM), handled by the I2sEs8311
+// capture path — MicConfig stays None. RTC is a PCF85063 (register map is NOT
+// PCF8563-compatible); until an RtcType::Pcf85063 driver lands, the profile
+// declares RtcType::None and deep-sleep timing uses the RTC timer.
+constexpr AudioConfig WS397_AUDIO = {AudioOutput::I2sEs8311,
+                                     14,              // bclk
+                                     47,              // lrclk / WS
+                                     48,              // dout -> NS4150B
+                                     13,              // mclk
+                                     PIN_UNASSIGNED,  // codec rail: PMIC-managed
+                                     true,
+                                     39,              // ampEnable (PA_CTRL)
+                                     41,              // codec I2C = shared bus
+                                     42,
+                                     0x18,            // ES8311
+                                     PIN_UNASSIGNED};  // no buzzer: real speaker
+
+constexpr BoardProfile WS397 = {
+    Board::WS397,
+    "ws397",
+    InputStyle::DigitalButtons,  // UP4 / OK5 / DOWN6 / BOOT0, all active-low
+    DisplayController::SSD1677,
+    800,
+    480,
+    // sclk, mosi, cs, dc, rst, busy, powerEnable (rails are PMIC-managed)
+    {11, 12, 10, 9, 46, 3, PIN_UNASSIGNED},
+    20000000,  // panel datasheet: 20 MHz max write clock
+    // SD is 4-bit SDMMC (below), not SPI
+    {PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, false, 0},
+    // back(BOOT strap: pull-up input is safe), confirm, left, right, up, down, power
+    {0, 5, PIN_UNASSIGNED, PIN_UNASSIGNED, 4, 6, PIN_UNASSIGNED, false},
+    PIN_UNASSIGNED,  // batteryAdc: battery telemetry lives behind the TG28 PMIC (I2C)
+    PIN_UNASSIGNED,  // batteryChargeStatus: idem
+    2.0f,
+    PIN_UNASSIGNED,  // usbDetect
+    NO_TOUCH,
+    NO_FRONTLIGHT,
+    WS397_AUDIO,
+    NO_LEDS,
+    NO_FLIP,  // mount orientation pending on-device validation
+    // clk, cmd, d0, d1, d2, d3, busWidth
+    {16, 17, 15, 7, 8, 18, 4},
+    NO_GAUGE,
+    {MicInput::None, PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, true},
+    // sda, scl, hz, rtcAddr(0: no Pcf85063 driver yet), tempHum(SHTC3@0x70: no
+    // driver yet — SensorsConfig maps SHT40), imu QMI8658
+    {41, 42, 400000, 0, 0, 0x6B, 0, RtcType::None, ImuType::Qmi8658},
+    1.0f,
+};
+
 constexpr uint32_t panelBytes(const BoardProfile& p) {
   return static_cast<uint32_t>(p.displayWidth / 8) * p.displayHeight;
 }
-constexpr uint32_t MAX_FRAMEBUFFER_BYTES = cmax(
+constexpr uint32_t MAX_FRAMEBUFFER_BYTES = cmax(cmax(
     cmax(cmax(FREEINK_DEVICE_X4 ? panelBytes(XTEINK_X4) : 0u, FREEINK_DEVICE_X3 ? panelBytes(XTEINK_X3) : 0u),
          cmax(FREEINK_DEVICE_M5 ? panelBytes(M5STACK_PAPER_COLOR) : 0u,
               FREEINK_DEVICE_MURPHY ? panelBytes(MURPHY_M3) : 0u)),
@@ -1766,12 +1829,15 @@ constexpr uint32_t MAX_FRAMEBUFFER_BYTES = cmax(
               cmax(cmax(FREEINK_DEVICE_PAPERS3 ? panelBytes(M5PAPER_S3) : 0u,
                         FREEINK_DEVICE_MURPHY_M4 ? panelBytes(MURPHY_M4) : 0u),
                    cmax(FREEINK_DEVICE_EEGO_A4 ? panelBytes(EEGO_A4) : 0u,
-                        FREEINK_DEVICE_ONEPAGE ? panelBytes(ONEPAGE) : 0u)))));
+                        FREEINK_DEVICE_ONEPAGE ? panelBytes(ONEPAGE) : 0u))))),
+    FREEINK_DEVICE_WS397 ? panelBytes(WS397) : 0u);
 
 // Compile-time default device — the profile ACTIVE starts as. With a single
 // device in the build this is the only device; with several same-MCU devices it
 // is the boot default until the consumer calls selectDevice().
-#if FREEINK_DEVICE_ONEPAGE
+#if FREEINK_DEVICE_WS397
+constexpr BoardProfile DEFAULT_DEVICE = WS397;
+#elif FREEINK_DEVICE_ONEPAGE
 constexpr BoardProfile DEFAULT_DEVICE = ONEPAGE;
 #elif FREEINK_DEVICE_PAPERMONO
 constexpr BoardProfile DEFAULT_DEVICE = PAPER_MONO;
@@ -1864,6 +1930,11 @@ inline bool selectDevice(Board which) {
       ACTIVE = STICKY;
       break;
 #endif
+#if FREEINK_DEVICE_WS397
+    case Board::WS397:
+      ACTIVE = WS397;
+      break;
+#endif
 #if FREEINK_DEVICE_X4PRO
     case Board::XteinkX4Pro:
       ACTIVE = XTEINK_X4_PRO;
@@ -1916,6 +1987,7 @@ inline bool isX4Classic() { return ACTIVE.board == Board::XteinkX4Classic; }
 inline bool isPaperMono() { return ACTIVE.board == Board::PaperMono; }
 inline bool isEegoA4() { return ACTIVE.board == Board::EegoA4; }
 inline bool isOnePage() { return ACTIVE.board == Board::OnePage; }
+inline bool isWS397() { return ACTIVE.board == Board::WS397; }
 inline bool hasTouch() { return ACTIVE.touch.controller != TouchController::None; }
 inline bool hasHomeKey() { return ACTIVE.touch.hasHomeKey; }
 inline bool hasPwmFrontlight() { return ACTIVE.frontlight.gpio != PIN_UNASSIGNED || ACTIVE.frontlight.viaPm1Pwm; }
