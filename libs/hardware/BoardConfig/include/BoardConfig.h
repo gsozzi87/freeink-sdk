@@ -1782,7 +1782,11 @@ constexpr AudioConfig WS397_AUDIO = {AudioOutput::I2sEs8311,
 constexpr BoardProfile WS397 = {
     Board::WS397,
     "ws397",
-    InputStyle::DigitalButtons,  // UP4 / OK5 / DOWN6 / BOOT0, all active-low
+    // UP4 / OK5 / DOWN6 / BOOT0, all active-low. OK doubles as the power key:
+    // click = confirm, hold = sleep, press = wake (GPIO5 is RTC-capable, so the
+    // EXT1 wake arms on it). BOOT is NOT used for wake: GPIO0 is the boot strap,
+    // and holding it low through the wake reset would drop into the ROM loader.
+    InputStyle::DigitalConfirmPowerHold,
     DisplayController::SSD1677,
     800,
     480,
@@ -1791,8 +1795,8 @@ constexpr BoardProfile WS397 = {
     20000000,  // panel datasheet: 20 MHz max write clock
     // SD is 4-bit SDMMC (below), not SPI
     {PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, false, 0},
-    // back(BOOT strap: pull-up input is safe), confirm, left, right, up, down, power
-    {0, 5, PIN_UNASSIGNED, PIN_UNASSIGNED, 4, 6, PIN_UNASSIGNED, false},
+    // back(BOOT strap: pull-up input is safe), confirm, left, right, up, down, power(=confirm)
+    {0, 5, PIN_UNASSIGNED, PIN_UNASSIGNED, 4, 6, 5, false},
     PIN_UNASSIGNED,  // batteryAdc: battery telemetry comes from the AXP2101-class PMIC (below)
     PIN_UNASSIGNED,  // batteryChargeStatus: idem
     2.0f,

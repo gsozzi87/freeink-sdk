@@ -320,6 +320,11 @@ uint8_t InputManager::getDigitalState() const {
       BoardConfig::ACTIVE.inputStyle != BoardConfig::InputStyle::DigitalConfirmPowerHold) {
     if (isDigitalPressed(BoardConfig::ACTIVE.input.back)) state |= (1 << BTN_BACK);
     if (isDigitalPressed(BoardConfig::ACTIVE.input.confirm)) state |= (1 << BTN_CONFIRM);
+  } else if (BoardConfig::ACTIVE.inputStyle == BoardConfig::InputStyle::DigitalConfirmPowerHold &&
+             BoardConfig::ACTIVE.input.back >= 0 && BoardConfig::ACTIVE.input.back != BoardConfig::ACTIVE.input.confirm) {
+    // Shared OK/PWR key, but a separate physical BACK key (Waveshare ePaper-3.97:
+    // BOOT on GPIO0). Sticky has no such key (back comes from touch) and is unchanged.
+    if (isDigitalPressed(BoardConfig::ACTIVE.input.back)) state |= (1 << BTN_BACK);
   }
 
   if (isDigitalPressed(BoardConfig::ACTIVE.input.left)) state |= (1 << BTN_LEFT);
