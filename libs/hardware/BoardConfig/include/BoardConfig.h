@@ -282,7 +282,8 @@
 #ifndef FREEINK_CAP_RTC
 #define FREEINK_CAP_RTC                                                                             \
   (FREEINK_DEVICE_X3 || FREEINK_DEVICE_STICKY || FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_X4CLASSIC || \
-   FREEINK_DEVICE_PAPERMONO || FREEINK_DEVICE_PAPERS3 || FREEINK_DEVICE_LILYGO || FREEINK_DEVICE_EEGO_A4)
+   FREEINK_DEVICE_PAPERMONO || FREEINK_DEVICE_PAPERS3 || FREEINK_DEVICE_LILYGO || FREEINK_DEVICE_EEGO_A4 || \
+   FREEINK_DEVICE_WS397)
 #endif
 #ifndef FREEINK_CAP_TEMP_HUMIDITY
 #define FREEINK_CAP_TEMP_HUMIDITY (FREEINK_DEVICE_STICKY)
@@ -632,7 +633,7 @@ struct MicConfig {
   bool enableActiveHigh;
 };
 
-enum class RtcType : uint8_t { None, Pcf8563, Ds3231, Rx8130 };
+enum class RtcType : uint8_t { None, Pcf8563, Ds3231, Rx8130, Pcf85063 };
 enum class ImuType : uint8_t { None, Lsm6ds3, Qmi8658 };
 
 // On-board I2C sensors sharing one bus (e.g. the Sticky's RTC + temp/humidity +
@@ -642,7 +643,7 @@ struct SensorsConfig {
   int8_t i2cSda;
   int8_t i2cScl;
   uint32_t i2cHz;
-  uint8_t rtcAddr;           // PCF8563 = 0x51, DS3231 = 0x68; 0 = none
+  uint8_t rtcAddr;           // PCF8563 / PCF85063 = 0x51, DS3231 = 0x68; 0 = none
   uint8_t tempHumidityAddr;  // SHT40 = 0x44; 0 = none
   uint8_t imuAddr;           // LSM6DS3TR-C = 0x6A, QMI8658 = 0x6B/0x6A; 0 = none
   uint8_t i2cBus = 0;        // 0 = Wire, 1 = Wire1 on multi-bus SoCs
@@ -1763,9 +1764,8 @@ constexpr uint32_t cmax(uint32_t a, uint32_t b) { return a > b ? a : b; }
 // 8ohm/1W speaker; PA enable on GPIO39. CAVEATS: GPIO39 doubles as the
 // QMI8658 INT1 in the vendor schematic (amp-enable wins here; IMU runs
 // polled). Mic is I2S via the ES8311 (not PDM), handled by the I2sEs8311
-// capture path — MicConfig stays None. RTC is a PCF85063 (register map is NOT
-// PCF8563-compatible); until an RtcType::Pcf85063 driver lands, the profile
-// declares RtcType::None and deep-sleep timing uses the RTC timer.
+// capture path — MicConfig stays None. RTC is a PCF85063 at 0x51 (time block at
+// 0x04, OS flag in seconds bit7; INT on GPIO45 for a future alarm wake).
 constexpr AudioConfig WS397_AUDIO = {AudioOutput::I2sEs8311,
                                      14,              // bclk
                                      47,              // lrclk / WS
@@ -1809,9 +1809,9 @@ constexpr BoardProfile WS397 = {
     // state from STATUS2. Vendor firmware drives it through XPowersLib's AXP2101.
     {41, 42, 400000, 0x34, 0, 0, GaugeType::Axp2101},
     {MicInput::None, PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, true},
-    // sda, scl, hz, rtcAddr(0: no Pcf85063 driver yet), tempHum(SHTC3@0x70: no
-    // driver yet — SensorsConfig maps SHT40), imu QMI8658
-    {41, 42, 400000, 0, 0, 0x6B, 0, RtcType::None, ImuType::Qmi8658},
+    // sda, scl, hz, rtcAddr PCF85063, tempHum(SHTC3@0x70: no driver yet —
+    // SensorsConfig maps SHT40), imu QMI8658
+    {41, 42, 400000, 0x51, 0, 0x6B, 0, RtcType::Pcf85063, ImuType::Qmi8658},
     1.0f,
 };
 

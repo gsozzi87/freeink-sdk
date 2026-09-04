@@ -19,6 +19,16 @@ constexpr uint8_t PCF8563_REG_CLKOUT = 0x0D;
 constexpr uint8_t PCF8563_CLKOUT_DISABLED = 0x00;
 constexpr uint8_t PCF8563_VL_FLAG = 0x80;  // seconds reg bit7: oscillator stopped / voltage-low
 
+// PCF85063 register map (Waveshare ePaper-3.97; confirmed against the vendor
+// pcf85063_bsp). Same field order as the PCF8563 but the time block starts at
+// 0x04 and there is no century bit; the OS (oscillator stop) flag is seconds bit7.
+constexpr uint8_t PCF85063_REG_CONTROL1 = 0x00;
+constexpr uint8_t PCF85063_REG_CONTROL2 = 0x01;
+constexpr uint8_t PCF85063_REG_TIME = 0x04;  // seconds, minutes, hours, days, weekdays, months, years
+constexpr uint8_t PCF85063_CONTROL1_STOP = 0x20;
+constexpr uint8_t PCF85063_CONTROL2_COF_OFF = 0x07;  // COF[2:0] = 111 disables CLKOUT
+constexpr uint8_t PCF85063_OS_FLAG = 0x80;
+
 // DS3231 register map.
 constexpr uint8_t DS3231_REG_TIME = 0x00;  // seconds, minutes, hours, day, date, month, year
 constexpr uint8_t DS3231_REG_CONTROL = 0x0E;
@@ -100,6 +110,19 @@ bool Rtc::begin() {
     case BoardConfig::RtcType::Rx8130:
       if (!readRegs(addr, RX8130_REG_CONTROL0, &status, 1)) return false;
       break;
+    case BoardConfig::RtcType::Pcf85063: {
+      if (!readRegs(addr, PCF85063_REG_CONTROL1, &status, 1)) return false;
+      // Make sure the clock runs (clear STOP) and silence CLKOUT: the pin is
+      // unused here and toggling it at 32 kHz only costs battery.
+      if (status & PCF85063_CONTROL1_STOP) {
+        writeReg(addr, PCF85063_REG_CONTROL1, static_cast<uint8_t>(status & ~PCF85063_CONTROL1_STOP));
+      }
+      uint8_t ctrl2 = 0;
+      if (readRegs(addr, PCF85063_REG_CONTROL2, &ctrl2, 1) && (ctrl2 & 0x07) != PCF85063_CONTROL2_COF_OFF) {
+        writeReg(addr, PCF85063_REG_CONTROL2, static_cast<uint8_t>((ctrl2 & ~0x07) | PCF85063_CONTROL2_COF_OFF));
+      }
+      break;
+    }
     case BoardConfig::RtcType::None:
       return false;
   }
@@ -163,6 +186,18 @@ bool Rtc::now(DateTime& out) {
       out.year = static_cast<uint16_t>(2000 + bcdToDec(raw[6]));
       return true;
     }
+    case BoardConfig::RtcType::Pcf85063: {
+      if (!readRegs(addr, PCF85063_REG_TIME, raw, sizeof(raw))) return false;
+      if (raw[0] & PCF85063_OS_FLAG) return false;  // oscillator stopped -> time not trustworthy
+      out.second = bcdToDec(raw[0] & 0x7FU);
+      out.minute = bcdToDec(raw[1] & 0x7FU);
+      out.hour = bcdToDec(raw[2] & 0x3FU);
+      out.day = bcdToDec(raw[3] & 0x3FU);
+      out.weekday = bcdToDec(raw[4] & 0x07U);
+      out.month = bcdToDec(raw[5] & 0x1FU);
+      out.year = static_cast<uint16_t>(2000 + bcdToDec(raw[6]));
+      return true;
+    }
     case BoardConfig::RtcType::None:
       return false;
   }
@@ -177,6 +212,19 @@ bool Rtc::set(const DateTime& dt) {
   ensureWire();
   auto& wire = sensorWire();
   if (s.rtcType == BoardConfig::RtcType::None) return false;
+  if (s.rtcType == BoardConfig::RtcType::Pcf85063) {
+    // Writing the seconds register with bit7 clear also clears the OS flag.
+    wire.beginTransmission(addr);
+    wire.write(PCF85063_REG_TIME);
+    wire.write(decToBcd(dt.second));
+    wire.write(decToBcd(dt.minute));
+    wire.write(decToBcd(dt.hour));
+    wire.write(decToBcd(dt.day));
+    wire.write(static_cast<uint8_t>(dt.weekday % 7u));
+    wire.write(decToBcd(dt.month));
+    wire.write(decToBcd(static_cast<uint8_t>(dt.year % 100)));
+    return wire.endTransmission() == 0;
+  }
   if (s.rtcType == BoardConfig::RtcType::Rx8130) {
     uint8_t control = 0;
     if (!readRegs(addr, RX8130_REG_CONTROL0, &control, 1) ||
