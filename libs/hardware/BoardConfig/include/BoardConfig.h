@@ -263,7 +263,7 @@
 #ifndef FREEINK_BATTERY_I2C_GAUGE
 #define FREEINK_BATTERY_I2C_GAUGE                                                            \
   (FREEINK_DEVICE_X3 || FREEINK_DEVICE_LILYGO || FREEINK_DEVICE_STICKY || FREEINK_DEVICE_X4PRO || \
-   FREEINK_DEVICE_X4CLASSIC)
+   FREEINK_DEVICE_X4CLASSIC || FREEINK_DEVICE_WS397)
 #endif
 #ifndef FREEINK_CAP_COLOR
 #define FREEINK_CAP_COLOR (FREEINK_DEVICE_M5)
@@ -478,7 +478,7 @@ struct SdmmcPins {
 // init, so BatteryMonitor dispatches on it. Bq27220: TI command registers, no profile
 // upload (LilyGo/X3). Cw2017: CellWise gauge that needs an 80-byte BATINFO battery
 // profile loaded before it reports a valid SoC (Xteink X4 Pro).
-enum class GaugeType : uint8_t { Bq27220, Cw2017 };
+enum class GaugeType : uint8_t { Bq27220, Cw2017, Axp2101 };
 
 // I2C fuel-gauge / charger wiring (e.g. BQ27220 + BQ25896 on LilyGo T5 S3). When
 // gaugeAddr != 0 (and FREEINK_BATTERY_I2C_GAUGE is set), BatteryMonitor reads the
@@ -488,7 +488,7 @@ struct BatteryGaugeConfig {
   int8_t i2cSda;
   int8_t i2cScl;
   uint32_t i2cHz;
-  uint8_t gaugeAddr;    // BQ27220 = 0x55; CW2017 = 0x63; 0 = no I2C gauge (use ADC)
+  uint8_t gaugeAddr;    // BQ27220 = 0x55; CW2017 = 0x63; AXP2101 PMIC = 0x34; 0 = no I2C gauge (use ADC)
   uint8_t chargerAddr;  // BQ25896 = 0x6B; 0 = none
   // Arduino I2C controller index: 0 = Wire, 1 = Wire1. Default 0. Set to 1 on
   // boards where the gauge sits on a different physical bus than another I2C
@@ -1793,7 +1793,7 @@ constexpr BoardProfile WS397 = {
     {PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, false, 0},
     // back(BOOT strap: pull-up input is safe), confirm, left, right, up, down, power
     {0, 5, PIN_UNASSIGNED, PIN_UNASSIGNED, 4, 6, PIN_UNASSIGNED, false},
-    PIN_UNASSIGNED,  // batteryAdc: battery telemetry lives behind the TG28 PMIC (I2C)
+    PIN_UNASSIGNED,  // batteryAdc: battery telemetry comes from the AXP2101-class PMIC (below)
     PIN_UNASSIGNED,  // batteryChargeStatus: idem
     2.0f,
     PIN_UNASSIGNED,  // usbDetect
@@ -1804,7 +1804,10 @@ constexpr BoardProfile WS397 = {
     NO_FLIP,  // mount orientation pending on-device validation
     // clk, cmd, d0, d1, d2, d3, busWidth
     {16, 17, 15, 7, 8, 18, 4},
-    NO_GAUGE,
+    // PMIC is a TG28 (AXP2101 register-compatible, IC_TYPE 0x4A) on the shared
+    // bus: SoC from its coulomb-counter gauge (0xA4), VBAT from ADC0/1, charge
+    // state from STATUS2. Vendor firmware drives it through XPowersLib's AXP2101.
+    {41, 42, 400000, 0x34, 0, 0, GaugeType::Axp2101},
     {MicInput::None, PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, true},
     // sda, scl, hz, rtcAddr(0: no Pcf85063 driver yet), tempHum(SHTC3@0x70: no
     // driver yet — SensorsConfig maps SHT40), imu QMI8658

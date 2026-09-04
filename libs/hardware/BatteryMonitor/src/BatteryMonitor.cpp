@@ -23,6 +23,17 @@ constexpr uint8_t BQ27220_VOLTAGE = 0x08;          // battery voltage, mV (u16 L
 constexpr uint8_t BQ27220_CURRENT = 0x0C;          // average current, signed mA (i16 LE)
 constexpr uint8_t BQ27220_STATE_OF_CHARGE = 0x2C;  // SoC, percent (u16 LE)
 constexpr uint8_t BQ25896_REG_STATUS = 0x0B;       // CHRG_STAT in bits [4:3]
+// AXP2101-class PMIC (X-Powers; TG28 clone on the Waveshare ePaper-3.97). The
+// PMIC has a built-in fuel gauge, so battery telemetry is register reads:
+constexpr uint8_t AXP2101_REG_STATUS1 = 0x00;      // bit3 battery present, bit5 VBUS good
+constexpr uint8_t AXP2101_REG_STATUS2 = 0x01;      // bits[7:5]: 01 charging, 10 discharging, 00 standby
+constexpr uint8_t AXP2101_REG_IC_TYPE = 0x03;      // 0x4A
+constexpr uint8_t AXP2101_REG_ADC_CTRL = 0x30;     // bit0 VBAT ADC enable, bit3 VSYS ADC enable
+constexpr uint8_t AXP2101_REG_VBAT_H = 0x34;       // VBAT[12:8] in bits[4:0]
+constexpr uint8_t AXP2101_REG_VBAT_L = 0x35;       // VBAT[7:0], 1 mV/LSB
+constexpr uint8_t AXP2101_REG_BAT_DET = 0x68;      // bit0 battery detection enable
+constexpr uint8_t AXP2101_REG_BAT_PERCENT = 0xA4;  // gauge SoC, 0..100
+constexpr uint8_t AXP2101_CHIP_ID = 0x4A;
 
 // The gauge's I2C controller (Wire or Wire1) per BoardConfig. On single-bus SoCs
 // (ESP32-C3, SOC_I2C_NUM == 1) Wire1 doesn't exist, so always use Wire there.
@@ -202,9 +213,61 @@ bool cw2017EnsureProfile(const uint8_t addr) {
   return cw2017WaitUntilReady(addr);
 }
 
+
+// --- AXP2101 (X-Powers PMIC with built-in gauge) -----------------------------
+// Only the telemetry bits are touched: battery detection + VBAT/VSYS ADC enable.
+// Rails, charge current and power-key timing are left exactly as the PMIC's
+// OTP / previous firmware configured them (the vendor firmware sets DC1 and
+// ALDO1-3 to 3.3 V and a 200 mA charge current; those persist while VBAT is
+// connected, and the board boots on them regardless).
+bool axp2101Ensure(uint8_t addr) {
+  static bool ready = false;
+  if (ready) return true;
+  uint8_t id = 0;
+  if (!readReg8(addr, AXP2101_REG_IC_TYPE, id) || id != AXP2101_CHIP_ID) return false;
+  uint8_t v = 0;
+  if (readReg8(addr, AXP2101_REG_BAT_DET, v) && !(v & 0x01)) writeReg8(addr, AXP2101_REG_BAT_DET, v | 0x01);
+  if (readReg8(addr, AXP2101_REG_ADC_CTRL, v) && (v & 0x09) != 0x09) writeReg8(addr, AXP2101_REG_ADC_CTRL, v | 0x09);
+  ready = true;
+  return true;
+}
+
+bool axp2101BatteryPresent(uint8_t addr) {
+  uint8_t s1 = 0;
+  return readReg8(addr, AXP2101_REG_STATUS1, s1) && (s1 & (1u << 3));
+}
+
+bool axp2101ReadSoc(uint8_t addr, uint16_t& out) {
+  if (!axp2101Ensure(addr) || !axp2101BatteryPresent(addr)) return false;
+  uint8_t soc = 0;
+  if (!readReg8(addr, AXP2101_REG_BAT_PERCENT, soc)) return false;
+  out = soc > 100 ? 100 : soc;
+  return true;
+}
+
+bool axp2101ReadMillivolts(uint8_t addr, uint16_t& out) {
+  if (!axp2101Ensure(addr) || !axp2101BatteryPresent(addr)) return false;
+  uint8_t hi = 0, lo = 0;
+  if (!readReg8(addr, AXP2101_REG_VBAT_H, hi) || !readReg8(addr, AXP2101_REG_VBAT_L, lo)) return false;
+  out = static_cast<uint16_t>((hi & 0x1F) << 8) | lo;
+  return out > 0;
+}
+
+// Charging = STATUS2[7:5] == 01. `known` false only on I2C failure.
+bool axp2101ReadCharging(uint8_t addr, bool& known) {
+  uint8_t s2 = 0;
+  if (!axp2101Ensure(addr) || !readReg8(addr, AXP2101_REG_STATUS2, s2)) {
+    known = false;
+    return false;
+  }
+  known = true;
+  return (s2 >> 5) == 0x01;
+}
+
 // SoC (0..100) from the active gauge, dispatched by type. false on I2C failure.
 bool readGaugeSoc(uint16_t& out) {
   const auto& g = BoardConfig::ACTIVE.batteryGauge;
+  if (g.gaugeType == BoardConfig::GaugeType::Axp2101) return axp2101ReadSoc(g.gaugeAddr, out);
   if (g.gaugeType == BoardConfig::GaugeType::Cw2017) {
     static bool initialized = false;
     static unsigned long lastInitAttemptMs = 0;
@@ -241,6 +304,7 @@ bool readGaugeSoc(uint16_t& out) {
 // Battery voltage (mV) from the active gauge, dispatched by type. false on failure.
 bool readGaugeMillivolts(uint16_t& out) {
   const auto& g = BoardConfig::ACTIVE.batteryGauge;
+  if (g.gaugeType == BoardConfig::GaugeType::Axp2101) return axp2101ReadMillivolts(g.gaugeAddr, out);
   if (g.gaugeType == BoardConfig::GaugeType::Cw2017) {
     uint8_t hi = 0, lo = 0;
     if (!readReg8(g.gaugeAddr, CW2017_REG_VCELL_H, hi)) return false;
@@ -268,6 +332,7 @@ bool readGaugeMillivolts(uint16_t& out) {
 // a board with neither gaugeAddr nor chargerAddr).
 bool readGaugeCharging(bool& known) {
   const auto& g = BoardConfig::ACTIVE.batteryGauge;
+  if (g.gaugeType == BoardConfig::GaugeType::Axp2101) return axp2101ReadCharging(g.gaugeAddr, known);
   // CW2017 has no current register and the X4 Pro has no charger IC on this bus, so
   // charging state is not observable from the gauge (the OEM infers it elsewhere).
   if (g.gaugeType == BoardConfig::GaugeType::Cw2017) {
