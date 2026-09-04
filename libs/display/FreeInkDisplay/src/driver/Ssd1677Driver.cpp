@@ -672,6 +672,11 @@ static const Ssd1677Config& ssd1677ActiveConfig() { return FREEINK_SSD1677_CONFI
 static const Ssd1677Config& ssd1677ActiveConfig() {
   switch (BoardConfig::ACTIVE.board) {
     case BoardConfig::Board::Sticky: return ssd1677StickyConfig();
+    // Waveshare ESP32-S3-ePaper-3.97: Waveshare's own EPD_3in97 driver uses the
+    // exact Sticky sequences (init border 0x01, FULL 0x22=0xF7, PARTIAL 0x22=0xFF
+    // with border 0x80, warm/4-gray 0xD7). The X4 default's 0xFC partial leaves
+    // heavy ghosting on this panel; the Sticky config is vendor parity.
+    case BoardConfig::Board::WS397: return ssd1677StickyConfig();
     // X4 Pro runs on the stock X4/GDEQ0426T82 config — same controller and panel
     // class, confirmed painting on hardware. No custom LUT or drive voltages needed.
     // Layers the fast-DU shortcut only when the build opts in (ssd1677X4ProConfig).
