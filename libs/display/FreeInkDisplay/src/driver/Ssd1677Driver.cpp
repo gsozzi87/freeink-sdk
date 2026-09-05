@@ -99,6 +99,25 @@ static const Ssd1677Config& ssd1677StickyConfig() {
   return cfg;
 }
 
+// Waveshare ESP32-S3-ePaper-3.97 (SSD1677, 800x480). Waveshare's own EPD_3in97
+// driver uses the exact Sticky sequences (init border 0x01, FULL 0x22=0xF7,
+// PARTIAL 0x22=0xFF with border 0x80); the X4 default's 0xFC partial leaves heavy
+// ghosting on this panel, so start from the Sticky config (vendor parity).
+// On top of that, the vendor "Fast" mode -- 0x1A=0x6A, then 0x22=0xD7 -- is a
+// single-cycle absolute clean (0xD7 skips the temperature reload, so the warm
+// value written just before selects the short waveform). Wire it as HALF so the
+// periodic ghost-clearing refresh, and the first paint after boot/wake, is one
+// flash instead of the multi-inversion OTP FULL the Sticky config falls back to.
+static const Ssd1677Config& ssd1677Ws397Config() {
+  static const Ssd1677Config cfg = [] {
+    Ssd1677Config c = ssd1677StickyConfig();
+    c.halfRefreshTemp = 0x6A;  // vendor Fast temperature, written via 0x1A before the sequence
+    c.halfSeqOverride = 0xD7;  // vendor Fast update sequence: single cycle, self-powers down
+    return c;
+  }();
+  return cfg;
+}
+
 // ── Reusable per-board waveform shortcuts ────────────────────────────────────
 // Opt-in optimizations a board can layer onto a base Ssd1677Config when its
 // specific panel is known to tolerate them. Each is a pure copy-and-tweak so a
@@ -672,11 +691,9 @@ static const Ssd1677Config& ssd1677ActiveConfig() { return FREEINK_SSD1677_CONFI
 static const Ssd1677Config& ssd1677ActiveConfig() {
   switch (BoardConfig::ACTIVE.board) {
     case BoardConfig::Board::Sticky: return ssd1677StickyConfig();
-    // Waveshare ESP32-S3-ePaper-3.97: Waveshare's own EPD_3in97 driver uses the
-    // exact Sticky sequences (init border 0x01, FULL 0x22=0xF7, PARTIAL 0x22=0xFF
-    // with border 0x80, warm/4-gray 0xD7). The X4 default's 0xFC partial leaves
-    // heavy ghosting on this panel; the Sticky config is vendor parity.
-    case BoardConfig::Board::WS397: return ssd1677StickyConfig();
+    // Waveshare ESP32-S3-ePaper-3.97: Sticky sequences plus the vendor single-cycle
+    // "Fast" clean (0x1A=0x6A, 0x22=0xD7) as HALF (see ssd1677Ws397Config).
+    case BoardConfig::Board::WS397: return ssd1677Ws397Config();
     // X4 Pro runs on the stock X4/GDEQ0426T82 config — same controller and panel
     // class, confirmed painting on hardware. No custom LUT or drive voltages needed.
     // Layers the fast-DU shortcut only when the build opts in (ssd1677X4ProConfig).
