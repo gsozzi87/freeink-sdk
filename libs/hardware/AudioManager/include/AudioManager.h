@@ -8,7 +8,15 @@
 // caller-supplied byte source. Two codecs are supported, selected by
 // AudioConfig::output: ES8388 (Murphy M3, OEM-recovered register sequence)
 // and ES8311 (M5 PaperColor, mirroring M5Unified's speaker bring-up — the
-// codec clocks itself from BCLK, plus the AW8737A amp on its ampEnable pin).
+// codec clocks itself from BCLK, plus the AW8737A amp on its ampEnable pin;
+// boards with an MCLK line, like the Waveshare ws397, get the vendor MCLK-fed
+// bring-up instead).
+//
+// Capture: when the board wires the codec's ADC output back to the SoC
+// (AudioConfig::din, ES8311 only), beginCapture()/readCapture() pull 16-bit
+// mono PCM from the analog mic through the same I2S port (full duplex: RX
+// borrows TX's BCLK/WS, so playback and capture share one sample rate).
+// PDM mics are a separate capability (Microphone).
 //
 // Playback runs in a dedicated FreeRTOS task (priority above typical workers,
 // like the OEM "musicTask"), so play() returns immediately; with loop=true the
@@ -55,6 +63,25 @@ class AudioManager {
   // Codec power-down (CHIPPOWER off). begin() restores it.
   void powerDown();
 
+  // Full release: stop playback and capture, power the codec down and delete
+  // the I2S channels, so a later begin()/play() (or another instance) can
+  // re-create the port. powerDown() alone keeps the channels allocated.
+  void end();
+
+  // --- Capture through the output codec (ES8311 ADC, AudioConfig::din) ---
+  // True when the active board routes an analog mic through the codec.
+  bool captureAvailable() const;
+  // Powers the codec ADC and starts the I2S RX channel at sampleRate
+  // (8-48 kHz). Stops any playback first: the port has one clock.
+  bool beginCapture(uint32_t sampleRate);
+  // Reads up to maxSamples 16-bit mono samples, blocking up to timeoutMs for
+  // data. Returns samples read (0 = timeout, <0 = not capturing / error).
+  int readCapture(int16_t* dst, size_t maxSamples, uint32_t timeoutMs = 100);
+  // Stops the RX channel and powers the codec ADC down. Playback keeps working.
+  void endCapture();
+  bool isCapturing() const { return capturing_; }
+  uint32_t captureSampleRate() const { return capturing_ ? currentRate_ : 0; }
+
  private:
   struct WavInfo {
     uint32_t sampleRate = 0;
@@ -73,6 +100,7 @@ class AudioManager {
   bool codecInit();
   bool codecWrite(uint8_t reg, uint8_t value);
   void codecMute(bool mute);
+  void codecCapture(bool on);  // ES8311 ADC / PGA power and mic routing
   void setAmp(bool on);
 
   bool begun_ = false;
@@ -87,6 +115,11 @@ class AudioManager {
   void* txChan_ = nullptr;  // i2s_chan_handle_t (kept void* to slim the header)
   volatile bool chanEnabled_ = false;
   uint32_t currentRate_ = 0;
+
+  // RX side of the same port, created with TX when the board has a codec mic.
+  void* rxChan_ = nullptr;
+  volatile bool rxEnabled_ = false;
+  volatile bool capturing_ = false;
 };
 
 }  // namespace freeink

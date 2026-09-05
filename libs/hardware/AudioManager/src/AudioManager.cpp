@@ -52,6 +52,32 @@ constexpr RegVal ES8311_INIT[] = {
 
 constexpr uint8_t ES8311_VOL_MAX_REG = 0xCF;  // +16 dB, 0.5 dB/step (0xBF = 0 dB)
 
+// ES8311 bring-up for boards that feed the codec's MCLK pin (AudioConfig::mclk
+// wired; the I2S master outputs 256*fs there). Mirrors the vendor es8311_init()
+// shipped with the Waveshare ws397 examples (Espressif's es8311 component):
+// clocks from MCLK with unity pre-divider/multiplier, ADC and DAC OSR at the
+// 256*fs defaults, 16-bit I2S on both serial ports, analog + ADC modulator +
+// DAC powered, EQ bypassed. Preceded by the full reset (0x1F -> 0x00 -> 0x80)
+// with the vendor's settle delay, done in codecInit(). ADC/mic routing is
+// applied on demand by codecCapture().
+constexpr RegVal ES8311_INIT_MCLK[] = {
+    {0x01, 0x3F},  // CLK_MANAGER: MCLK from pin, every clock (ADC + DAC) on
+    {0x02, 0x00},  // CLK_MANAGER: DIV_PRE 1, MULT_PRE x1 -> internal MCLK = 256*fs
+    {0x03, 0x10},  // ADC: single-speed, OSR 0x10
+    {0x04, 0x10},  // DAC: OSR 0x10
+    {0x05, 0x00},  // ADC/DAC clock dividers 1
+    {0x09, 0x0C},  // SDP-in (DAC): I2S, 16-bit
+    {0x0A, 0x0C},  // SDP-out (ADC): I2S, 16-bit
+    {0x0D, 0x01},  // SYSTEM: power up analog circuitry
+    {0x0E, 0x02},  // SYSTEM: enable analog PGA + ADC modulator
+    {0x12, 0x00},  // SYSTEM: power up DAC
+    {0x13, 0x10},  // SYSTEM: enable output to HP drive
+    {0x1C, 0x6A},  // ADC: EQ bypass, cancel DC offset digitally
+    {0x32, 0xB2},  // DAC volume: vendor default (70 %) for the 1 W speaker
+    {0x37, 0x08},  // DAC: bypass equalizer
+};
+constexpr RegVal ES8311_RESET_SEQ[] = {{0x00, 0x1F}, {0x00, 0x00}, {0x00, 0x80}};
+
 uint32_t readLE32(const uint8_t* p) {
   return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
@@ -79,7 +105,14 @@ bool AudioManager::codecInit() {
 
   const RegVal* seq;
   size_t seqLen;
-  if (cfg.output == BoardConfig::AudioOutput::I2sEs8311) {
+  const bool es8311 = cfg.output == BoardConfig::AudioOutput::I2sEs8311;
+  // ES8311 fed from the MCLK pin (ws397) takes the vendor bring-up; without an
+  // MCLK line (M5 PaperColor) it self-clocks from BCLK.
+  const bool es8311Mclk = es8311 && cfg.mclk != BoardConfig::PIN_UNASSIGNED;
+  if (es8311Mclk) {
+    seq = ES8311_INIT_MCLK;
+    seqLen = sizeof(ES8311_INIT_MCLK) / sizeof(ES8311_INIT_MCLK[0]);
+  } else if (es8311) {
     seq = ES8311_INIT;
     seqLen = sizeof(ES8311_INIT) / sizeof(ES8311_INIT[0]);
   } else {
@@ -87,12 +120,25 @@ bool AudioManager::codecInit() {
     seqLen = sizeof(ES8388_INIT) / sizeof(ES8388_INIT[0]);
   }
 
+  // A bus another manager already brought up (PMIC / RTC on the same pins)
+  // stays as it is: begin() on an initialized TwoWire keeps its clock.
   Wire.begin(cfg.codecSda, cfg.codecScl, CODEC_I2C_HZ);
 
   // The OEM firmware retries until the codec ACKs; three attempts is plenty
   // for a codec already powered.
   for (int attempt = 0; attempt < 3; ++attempt) {
     bool ok = true;
+    if (es8311Mclk) {
+      // Vendor reset: hold in reset, release, then the power-on command.
+      for (size_t i = 0; i < sizeof(ES8311_RESET_SEQ) / sizeof(ES8311_RESET_SEQ[0]) && ok; ++i) {
+        ok = codecWrite(ES8311_RESET_SEQ[i].reg, ES8311_RESET_SEQ[i].val);
+        if (i == 0) delay(20);
+      }
+      if (!ok) {
+        delay(100);
+        continue;
+      }
+    }
     for (size_t i = 0; i < seqLen; ++i) {
       if (!codecWrite(seq[i].reg, seq[i].val)) {
         ok = false;
@@ -163,6 +209,22 @@ void AudioManager::setAmp(bool on) {
   digitalWrite(cfg.ampEnable, on ? HIGH : LOW);
 }
 
+bool AudioManager::captureAvailable() const { return BoardConfig::hasCodecMic(); }
+
+// ES8311 ADC path, per the vendor es8311_microphone_config(): analog MIC1 into
+// the PGA at max gain, ADC digital volume 0xC8, modulator + PGA powered. Off
+// drops the modulator/PGA power again so an idle mic doesn't burn current.
+void AudioManager::codecCapture(bool on) {
+  if (!captureAvailable()) return;
+  if (on) {
+    codecWrite(0x0E, 0x02);  // SYSTEM: analog PGA + ADC modulator on
+    codecWrite(0x14, 0x1A);  // SYSTEM: analog mic (LINSEL 1), PGA gain max
+    codecWrite(0x17, 0xC8);  // ADC volume
+  } else {
+    codecWrite(0x0E, 0x00);  // SYSTEM: ADC modulator + PGA off
+  }
+}
+
 void AudioManager::powerDown() {
   const auto& cfg = BoardConfig::ACTIVE.audio;
   if (!begun_) return;
@@ -218,6 +280,7 @@ bool AudioManager::parseWavHeader(const WavSource& source, WavInfo& info) {
 bool AudioManager::ensureI2s(uint32_t sampleRate) {
   const auto& cfg = BoardConfig::ACTIVE.audio;
   i2s_chan_handle_t tx = (i2s_chan_handle_t)txChan_;
+  i2s_chan_handle_t rx = (i2s_chan_handle_t)rxChan_;
 
   if (tx && currentRate_ == sampleRate) {
     // Channel exists but was disabled when the last playback drained.
@@ -229,13 +292,22 @@ bool AudioManager::ensureI2s(uint32_t sampleRate) {
   }
 
   if (tx) {
+    // Rate change on the shared port: both channels must be disabled while the
+    // clock is reconfigured (RX borrows TX's BCLK/WS in full duplex).
     if (chanEnabled_) i2s_channel_disable(tx);
     chanEnabled_ = false;
+    if (rx && rxEnabled_) i2s_channel_disable(rx);
+    rxEnabled_ = false;
     i2s_std_clk_config_t clk = I2S_STD_CLK_DEFAULT_CONFIG(sampleRate);
     clk.mclk_multiple = I2S_MCLK_MULTIPLE_256;  // codec runs 256x MCLK/LRCK
     if (i2s_channel_reconfig_std_clock(tx, &clk) != ESP_OK) return false;
+    if (rx && i2s_channel_reconfig_std_clock(rx, &clk) != ESP_OK) return false;
     if (i2s_channel_enable(tx) != ESP_OK) return false;
     chanEnabled_ = true;
+    if (rx && capturing_) {
+      if (i2s_channel_enable(rx) != ESP_OK) return false;
+      rxEnabled_ = true;
+    }
     currentRate_ = sampleRate;
     return true;
   }
@@ -244,7 +316,10 @@ bool AudioManager::ensureI2s(uint32_t sampleRate) {
   // Without auto_clear the DMA replays its last buffers on underrun — heard
   // as a looping stutter after playback stops.
   chanCfg.auto_clear = true;
-  if (i2s_new_channel(&chanCfg, &tx, nullptr) != ESP_OK) return false;
+  // A codec mic gets its RX channel created together with TX: the driver only
+  // pairs the two directions on one port (full duplex) at creation.
+  const bool withRx = captureAvailable();
+  if (i2s_new_channel(&chanCfg, &tx, withRx ? &rx : nullptr) != ESP_OK) return false;
 
   i2s_std_config_t std = {};
   std.clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(sampleRate);
@@ -255,23 +330,33 @@ bool AudioManager::ensureI2s(uint32_t sampleRate) {
   std.gpio_cfg.bclk = (gpio_num_t)cfg.bclk;
   std.gpio_cfg.ws = (gpio_num_t)cfg.lrclk;
   std.gpio_cfg.dout = (gpio_num_t)cfg.dout;
-  std.gpio_cfg.din = I2S_GPIO_UNUSED;
+  // Each channel only claims the data pin of its own direction.
+  std.gpio_cfg.din = withRx ? (gpio_num_t)cfg.din : I2S_GPIO_UNUSED;
 
-  if (i2s_channel_init_std_mode(tx, &std) != ESP_OK) {
+  auto fail = [&]() {
     i2s_del_channel(tx);
+    if (rx) i2s_del_channel(rx);
     return false;
-  }
-  if (i2s_channel_enable(tx) != ESP_OK) {
-    i2s_del_channel(tx);
-    return false;
-  }
+  };
+  if (i2s_channel_init_std_mode(tx, &std) != ESP_OK) return fail();
+  if (rx && i2s_channel_init_std_mode(rx, &std) != ESP_OK) return fail();
+  if (i2s_channel_enable(tx) != ESP_OK) return fail();
   txChan_ = tx;
+  rxChan_ = rx;  // stays disabled until beginCapture()
   chanEnabled_ = true;
+  rxEnabled_ = false;
   currentRate_ = sampleRate;
   return true;
 }
 
 void AudioManager::teardownI2s() {
+  if (rxChan_) {
+    i2s_chan_handle_t rx = (i2s_chan_handle_t)rxChan_;
+    if (rxEnabled_) i2s_channel_disable(rx);
+    i2s_del_channel(rx);
+    rxChan_ = nullptr;
+    rxEnabled_ = false;
+  }
   if (!txChan_) return;
   i2s_chan_handle_t tx = (i2s_chan_handle_t)txChan_;
   if (chanEnabled_) i2s_channel_disable(tx);
@@ -279,6 +364,69 @@ void AudioManager::teardownI2s() {
   txChan_ = nullptr;
   chanEnabled_ = false;
   currentRate_ = 0;
+}
+
+bool AudioManager::beginCapture(uint32_t sampleRate) {
+  if (!captureAvailable()) return false;
+  if (sampleRate < 8000 || sampleRate > 48000) return false;
+  if (!begun_ && !begin()) return false;
+  if (capturing_ && currentRate_ == sampleRate) return true;
+  // One clock per port: playback (if any) yields, and a running capture at
+  // another rate is restarted.
+  stop();
+  if (capturing_) endCapture();
+  if (!ensureI2s(sampleRate) || !rxChan_) {
+    log_e("i2s capture setup failed");
+    return false;
+  }
+  codecCapture(true);
+  if (!rxEnabled_) {
+    if (i2s_channel_enable((i2s_chan_handle_t)rxChan_) != ESP_OK) {
+      codecCapture(false);
+      return false;
+    }
+    rxEnabled_ = true;
+  }
+  capturing_ = true;
+  return true;
+}
+
+int AudioManager::readCapture(int16_t* dst, size_t maxSamples, uint32_t timeoutMs) {
+  if (!capturing_ || !rxChan_ || !dst || maxSamples == 0) return -1;
+  i2s_chan_handle_t rx = (i2s_chan_handle_t)rxChan_;
+  // The port runs stereo 16-bit frames (shared with playback); the ADC data
+  // rides the left slot. De-interleave in blocks small enough for the stack.
+  constexpr size_t FRAMES = 128;
+  int16_t frames[FRAMES * 2];
+  size_t got = 0;
+  while (got < maxSamples) {
+    size_t want = maxSamples - got;
+    if (want > FRAMES) want = FRAMES;
+    size_t bytes = 0;
+    const esp_err_t err = i2s_channel_read(rx, frames, want * 4, &bytes, pdMS_TO_TICKS(timeoutMs));
+    const size_t n = bytes / 4;
+    for (size_t i = 0; i < n; ++i) dst[got + i] = frames[i * 2];
+    got += n;
+    if (err == ESP_ERR_TIMEOUT) break;
+    if (err != ESP_OK) return got ? (int)got : -1;
+    if (n < want) break;
+  }
+  return (int)got;
+}
+
+void AudioManager::endCapture() {
+  if (!capturing_) return;
+  capturing_ = false;
+  if (rxChan_ && rxEnabled_) i2s_channel_disable((i2s_chan_handle_t)rxChan_);
+  rxEnabled_ = false;
+  codecCapture(false);
+}
+
+void AudioManager::end() {
+  stop();
+  endCapture();
+  powerDown();
+  teardownI2s();
 }
 
 bool AudioManager::play(const WavSource& source, bool loop) {
@@ -414,13 +562,17 @@ void AudioManager::taskLoop() {
 
   // Flush silence through every DMA descriptor, then stop the channel
   // entirely — a merely-idle channel replays stale DMA contents (stutter).
+  // Except while a capture runs: RX takes its BCLK/WS from TX, so TX stays
+  // enabled (auto_clear keeps it on silence).
   memset(outBuf, 0, sizeof(outBuf));
   for (int i = 0; i < 6; ++i) {
     size_t written = 0;
     if (i2s_channel_write(tx, outBuf, sizeof(outBuf), &written, pdMS_TO_TICKS(200)) != ESP_OK) break;
   }
-  i2s_channel_disable(tx);
-  chanEnabled_ = false;
+  if (!capturing_) {
+    i2s_channel_disable(tx);
+    chanEnabled_ = false;
+  }
 
   playing_ = false;
   task_ = nullptr;
@@ -439,6 +591,12 @@ bool AudioManager::play(const WavSource&, bool) { return false; }
 bool AudioManager::playBuffer(const uint8_t*, size_t, bool) { return false; }
 void AudioManager::stop() {}
 void AudioManager::powerDown() {}
+void AudioManager::end() {}
+bool AudioManager::captureAvailable() const { return false; }
+bool AudioManager::beginCapture(uint32_t) { return false; }
+int AudioManager::readCapture(int16_t*, size_t, uint32_t) { return -1; }
+void AudioManager::endCapture() {}
+void AudioManager::codecCapture(bool) {}
 bool AudioManager::parseWavHeader(const WavSource&, WavInfo&) { return false; }
 bool AudioManager::ensureI2s(uint32_t) { return false; }
 void AudioManager::teardownI2s() {}

@@ -609,6 +609,11 @@ struct AudioConfig {
   int8_t codecScl;
   uint8_t codecAddr;  // 7-bit codec address, 0 = no control codec
   int8_t buzzer;      // separate LEDC tone pin (PIN_UNASSIGNED if none)
+  // I2S data in from the codec's ADC (its ASDOUT). Wired = the board's mic is
+  // analog into the codec (ES8311 MIC1), captured by AudioManager on the same
+  // I2S port as playback. PIN_UNASSIGNED = no codec mic (PDM mics use MicConfig).
+  // Defaulted so existing positional initializers stay valid.
+  int8_t din = PIN_UNASSIGNED;
 };
 
 struct LedConfig {
@@ -1777,7 +1782,8 @@ constexpr AudioConfig WS397_AUDIO = {AudioOutput::I2sEs8311,
                                      41,              // codec I2C = shared bus
                                      42,
                                      0x18,            // ES8311
-                                     PIN_UNASSIGNED};  // no buzzer: real speaker
+                                     PIN_UNASSIGNED,  // no buzzer: real speaker
+                                     21};             // din <- ES8311 ASDOUT (vendor 01_Audio_Test)
 
 constexpr BoardProfile WS397 = {
     Board::WS397,
@@ -2080,6 +2086,11 @@ inline void releaseSdRail() {
   }
 }
 inline bool hasMic() { return ACTIVE.mic.input != MicInput::None; }
+// Analog mic captured through the output codec's ADC (AudioManager capture
+// path); distinct from hasMic(), the PDM path served by Microphone.
+inline bool hasCodecMic() {
+  return ACTIVE.audio.output == AudioOutput::I2sEs8311 && ACTIVE.audio.din != PIN_UNASSIGNED;
+}
 inline bool hasBuzzer() { return ACTIVE.audio.buzzer != PIN_UNASSIGNED; }
 inline bool hasRtc() { return ACTIVE.sensors.rtcAddr != 0; }
 inline bool hasTempHumidity() { return ACTIVE.sensors.tempHumidityAddr != 0; }

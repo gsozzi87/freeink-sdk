@@ -1,8 +1,8 @@
 {
   "name": "AudioManager",
   "version": "1.0.0",
-  "description": "FreeInk audio output: WAV (16-bit PCM) playback through an I2S codec described by BoardConfig::ACTIVE.audio. Ships an ES8388-compatible control driver (Murphy M3). Playback runs in its own FreeRTOS task and can loop until stopped.",
-  "keywords": "audio, i2s, es8388, wav, eink",
+  "description": "FreeInk audio: WAV (16-bit PCM) playback through an I2S codec described by BoardConfig::ACTIVE.audio (ES8388 on Murphy M3, ES8311 on M5 PaperColor / Waveshare ws397), plus 16-bit mono capture from the ES8311 ADC on boards that wire its data-out back (AudioConfig::din). Playback runs in its own FreeRTOS task and can loop until stopped.",
+  "keywords": "audio, i2s, es8388, es8311, wav, microphone, eink",
   "authors": [{"name": "FreeInk SDK Contributors"}],
   "dependencies": {},
   "platforms": "espressif32",
