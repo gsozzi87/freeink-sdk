@@ -16,6 +16,7 @@
 // (AudioConfig::din, ES8311 only), beginCapture()/readCapture() pull 16-bit
 // mono PCM from the analog mic through the same I2S port (full duplex: RX
 // borrows TX's BCLK/WS, so playback and capture share one sample rate).
+// setMicGain() sube o baja lo que entra por ese micrófono (ver más abajo).
 // PDM mics are a separate capability (Microphone).
 //
 // Playback runs in a dedicated FreeRTOS task (priority above typical workers,
@@ -79,6 +80,23 @@ class AudioManager {
   int readCapture(int16_t* dst, size_t maxSamples, uint32_t timeoutMs = 100);
   // Stops the RX channel and powers the codec ADC down. Playback keeps working.
   void endCapture();
+
+  // --- Ganancia del micrófono (ES8311) ---------------------------------------
+  // Cuánto se le sube al micrófono, 0-100 %. El PGA ANALÓGICO ya queda siempre
+  // al máximo (30 dB, reg 0x14 = 0x1A), así que lo que mueve el porcentaje es
+  // la ganancia DIGITAL del ADC por encima de la que deja el vendor:
+  // 0 % = tal cual venía y 100 % = +MIC_GAIN_MAX_DB dB. Pasarse satura y le
+  // recorta las puntas a la voz, que para el dictado es peor que quedarse corto.
+  //
+  // Hay un solo códec por placa, así que el ajuste es estático: lo comparten
+  // todas las instancias (grabadora de voz, prueba de audio) y se aplica en
+  // cada beginCapture(), además de en caliente si el micrófono ya está abierto.
+  static constexpr int MIC_GAIN_MAX_DB = 36;
+  static constexpr uint8_t MIC_GAIN_DEFAULT = 50;  // +18 dB sobre el vendor
+  static void setMicGain(uint8_t percent);
+  static uint8_t micGain() { return s_micGain; }
+  // Decibeles que agrega el ajuste actual, para poder mostrarlos.
+  static int micGainDb() { return static_cast<int>(s_micGain) * MIC_GAIN_MAX_DB / 100; }
   bool isCapturing() const { return capturing_; }
   uint32_t captureSampleRate() const { return capturing_ ? currentRate_ : 0; }
 
@@ -98,7 +116,10 @@ class AudioManager {
   void teardownI2s();
 
   bool codecInit();
-  bool codecWrite(uint8_t reg, uint8_t value);
+  // No toca estado de la instancia (el códec es uno solo y sale de BoardConfig),
+  // así que es estática: la ganancia del micrófono también la necesita.
+  static bool codecWrite(uint8_t reg, uint8_t value);
+  static void applyMicGain();  // ES8311: 0x16 ADC_SCALE + 0x17 ADC_VOLUME
   void codecMute(bool mute);
   void codecCapture(bool on);  // ES8311 ADC / PGA power and mic routing
   void setAmp(bool on);
@@ -120,6 +141,8 @@ class AudioManager {
   void* rxChan_ = nullptr;
   volatile bool rxEnabled_ = false;
   volatile bool capturing_ = false;
+
+  static uint8_t s_micGain;
 };
 
 }  // namespace freeink

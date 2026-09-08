@@ -2,6 +2,12 @@
 
 #include <BoardConfig.h>
 
+// Ganancia del micrófono: un solo códec por placa, un solo valor compartido.
+// Vive fuera del #if para que el stub sin audio también enlace.
+namespace freeink {
+uint8_t AudioManager::s_micGain = AudioManager::MIC_GAIN_DEFAULT;
+}  // namespace freeink
+
 // Capability-gated like FrontlightManager: devices without FREEINK_CAP_AUDIO
 // compile the stub bodies at the bottom and link no I2S/codec code.
 #if FREEINK_CAP_AUDIO
@@ -222,11 +228,45 @@ void AudioManager::codecCapture(bool on) {
   if (!captureAvailable()) return;
   if (on) {
     codecWrite(0x0E, 0x02);  // SYSTEM: analog PGA + ADC modulator on
-    codecWrite(0x14, 0x1A);  // SYSTEM: analog mic (LINSEL 1), PGA gain max
-    codecWrite(0x17, 0xC8);  // ADC volume
+    codecWrite(0x14, 0x1A);  // SYSTEM: analog mic (LINSEL 1), PGA gain max (30 dB)
+    applyMicGain();          // 0x16 ADC_SCALE + 0x17 ADC_VOLUME, según setMicGain()
   } else {
     codecWrite(0x0E, 0x00);  // SYSTEM: ADC modulator + PGA off
   }
+}
+
+// ws397: el micrófono se oía flojísimo (8 % de pico hablándole a 15 cm) y el
+// dictado llegaba al servidor apenas audible. El PGA analógico (reg 0x14, bits
+// 3:0) ya estaba en su tope de 30 dB, así que lo único que queda por subir es
+// la ganancia digital del ADC, y son dos registros:
+//   0x16 ADC_SCALE : 0-7, pasos de 6 dB (de fábrica 4 = +24 dB)
+//   0x17 ADC_VOLUME: 0,5 dB por paso (el vendor deja 0xC8 = +4,5 dB)
+// El porcentaje se reparte entre los dos, grueso primero y el resto en el fino:
+// 0 % deja exactamente lo del vendor y 100 % suma 36 dB (18 dB llevando
+// ADC_SCALE de 4 a 7 y otros 18 dB de ADC_VOLUME). Es ganancia digital, no
+// mejora la relación señal/ruido, pero el ADC es de 24 bits y de ahí salen
+// muestras de 16, así que hasta acá no se pierde nada útil.
+void AudioManager::applyMicGain() {
+  if (!BoardConfig::hasCodecMic()) return;
+  constexpr uint8_t SCALE_BASE = 0x04;  // ADC_SCALE de fábrica: +24 dB
+  constexpr uint8_t SCALE_MAX = 0x07;   // tope del campo: +42 dB
+  constexpr uint8_t VOL_BASE = 0xC8;    // ADC_VOLUME del vendor: +4,5 dB
+  const int halfDb = static_cast<int>(s_micGain) * MIC_GAIN_MAX_DB * 2 / 100;  // en medios dB
+  int coarse = halfDb / 12;  // cada paso de ADC_SCALE son 6 dB = 12 medios dB
+  if (coarse > SCALE_MAX - SCALE_BASE) coarse = SCALE_MAX - SCALE_BASE;
+  int fine = halfDb - coarse * 12;
+  if (fine > 0xFF - VOL_BASE) fine = 0xFF - VOL_BASE;
+  codecWrite(0x16, static_cast<uint8_t>(SCALE_BASE + coarse));
+  codecWrite(0x17, static_cast<uint8_t>(VOL_BASE + fine));
+}
+
+void AudioManager::setMicGain(uint8_t percent) {
+  if (percent > 100) percent = 100;
+  s_micGain = percent;
+  // En caliente: si el micrófono está abierto, el cambio se oye en la próxima
+  // muestra. Con el códec dormido el I2C no contesta y no pasa nada: el valor
+  // queda guardado y lo aplica el siguiente beginCapture().
+  applyMicGain();
 }
 
 void AudioManager::powerDown() {
@@ -601,6 +641,8 @@ bool AudioManager::beginCapture(uint32_t) { return false; }
 int AudioManager::readCapture(int16_t*, size_t, uint32_t) { return -1; }
 void AudioManager::endCapture() {}
 void AudioManager::codecCapture(bool) {}
+void AudioManager::applyMicGain() {}
+void AudioManager::setMicGain(uint8_t percent) { s_micGain = percent > 100 ? 100 : percent; }
 bool AudioManager::parseWavHeader(const WavSource&, WavInfo&) { return false; }
 bool AudioManager::ensureI2s(uint32_t) { return false; }
 void AudioManager::teardownI2s() {}
