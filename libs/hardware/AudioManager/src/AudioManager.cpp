@@ -179,9 +179,13 @@ void AudioManager::setVolume(uint8_t percent) {
   const auto& cfg = BoardConfig::ACTIVE.audio;
   if (cfg.codecAddr == 0) return;
   if (cfg.output == BoardConfig::AudioOutput::I2sEs8311) {
-    // Single DAC volume register, 0.5 dB/step; full scale matches the init
-    // value M5 ships for this speaker (+16 dB).
-    codecWrite(0x32, (uint8_t)((uint16_t)percent * ES8311_VOL_MAX_REG / 100));
+    // Register 0x32 is logarithmic: dB = -95.5 + 0.5 * N. Scaling the percentage
+    // linearly onto N put 70 % at about -23 dB and 85 % at -7.5 dB, which is why
+    // the speaker sounded so quiet. Map the percentage onto decibels instead:
+    // 1 % = -40 dB, 100 % = +8 dB (0xCF, the vendor maximum), and 70 % lands
+    // exactly on 0xB2, the vendor's own default for this 1 W speaker. 0 = mute.
+    const uint8_t reg = percent == 0 ? 0 : (uint8_t)(111 + ((uint16_t)percent * 96) / 100);
+    codecWrite(0x32, reg);
     return;
   }
   const uint8_t reg = (uint8_t)((uint16_t)percent * ES8388_VOL_MAX_REG / 100);
