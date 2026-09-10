@@ -530,14 +530,17 @@ bool AudioManager::playBuffer(const uint8_t* data, size_t len, bool loop) {
 }
 
 void AudioManager::stop() {
-  if (!playing_) return;
-  stopRequested_ = true;
-  // The task deletes itself; wait for it to drain (bounded).
-  for (int i = 0; i < 200 && playing_; ++i) {
-    vTaskDelay(pdMS_TO_TICKS(10));
+  if (playing_) {
+    stopRequested_ = true;
+    // The task deletes itself; wait for it to drain (bounded).
+    for (int i = 0; i < 200 && playing_; ++i) {
+      vTaskDelay(pdMS_TO_TICKS(10));
+    }
   }
   // Drop the amp and mute the DAC so nothing residual reaches the output
-  // between alarms.
+  // between alarms. Unconditionally: a stop() after a capture-only session (the
+  // amp is enabled by begin(), not by playback) used to leave the amplifier
+  // powered and hissing until the next play.
   setAmp(false);
   codecMute(true);
 }
