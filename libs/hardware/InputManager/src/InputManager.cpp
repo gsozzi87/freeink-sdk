@@ -553,6 +553,14 @@ bool InputManager::isPowerButtonPhysicallyPressed() const {
   return digitalRead(pin) == activeLevel;
 }
 
+bool InputManager::isWakePinPhysicallyPressed() const {
+  const auto& in = BoardConfig::ACTIVE.input;
+  const int8_t pin = in.wakePin >= 0 ? in.wakePin : in.power;
+  if (pin < 0) return false;
+  const int activeLevel = in.powerActiveHigh ? HIGH : LOW;
+  return digitalRead(pin) == activeLevel;
+}
+
 bool InputManager::wasPressed(const uint8_t buttonIndex) const { return pressedEvents & (1 << buttonIndex); }
 
 bool InputManager::wasAnyPressed() const { return pressedEvents > 0; }

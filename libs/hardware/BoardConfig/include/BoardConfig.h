@@ -510,6 +510,13 @@ struct InputPins {
   int8_t power;
   bool powerActiveHigh;  // true = pressed reads HIGH (INPUT_PULLDOWN); false = active-LOW (INPUT_PULLUP)
   int8_t adcLadderPin = PIN_UNASSIGNED;  // ADC pin for single resistor ladder (e.g. OnePage GPIO4)
+  // Deep-sleep wake key when it is NOT the power key. PIN_UNASSIGNED = wake on
+  // `power` (every earlier board). Set on boards whose power key sits behind a
+  // PMIC on a non-RTC IRQ line (WS397: PWR -> AXP2101 PWRKEY, IRQ on GPIO38),
+  // so a plain RTC-capable key (WS397: OK on GPIO5) arms the EXT1/GPIO wake
+  // instead. Read through PowerManager::wakeSourcePin(); same polarity flag as
+  // `power` (powerActiveHigh).
+  int8_t wakePin = PIN_UNASSIGNED;
 };
 
 // Capacitive touch panel description (TouchController::None disables it).
@@ -746,6 +753,10 @@ struct BoardProfile {
   // I2C frontlight (LM3630A). Defaulted so existing profiles need no change;
   // a board with one sets it (EEGO A4).
   I2cFrontlightConfig i2cFrontlight = NO_I2C_FRONTLIGHT;
+  // PMIC interrupt line (open-drain, active-low, pulled up by the host). Documents
+  // the wiring for boards whose power key is a PMIC PWRKEY input (WS397: AXP2101
+  // IRQ on GPIO38); the consumer owns the key decoding. PIN_UNASSIGNED = none.
+  int8_t pmicIrq = PIN_UNASSIGNED;
 };
 
 constexpr TouchConfig NO_TOUCH = {TouchController::None,
@@ -1788,11 +1799,15 @@ constexpr AudioConfig WS397_AUDIO = {AudioOutput::I2sEs8311,
 constexpr BoardProfile WS397 = {
     Board::WS397,
     "ws397",
-    // UP4 / OK5 / DOWN6 / BOOT0, all active-low. OK doubles as the power key:
-    // click = confirm, hold = sleep, press = wake (GPIO5 is RTC-capable, so the
-    // EXT1 wake arms on it). BOOT is NOT used for wake: GPIO0 is the boot strap,
-    // and holding it low through the wake reset would drop into the ROM loader.
-    InputStyle::DigitalConfirmPowerHold,
+    // UP4 / OK5 / DOWN6 / BOOT0, all active-low, plain buttons: OK is confirm
+    // only. The physical PWR key is wired to the AXP2101 PWRKEY input, not to a
+    // GPIO: the PMIC reports it on its IRQ line (GPIO38, `pmicIrq`) and the
+    // consumer decodes INTSTS2 — so `power` is unassigned. GPIO38 is not an RTC
+    // GPIO and cannot wake the chip from deep sleep; OK (GPIO5, RTC-capable) is
+    // the wake key (`wakePin`). BOOT is NOT used for wake: GPIO0 is the boot
+    // strap, and holding it low through the wake reset would drop into the ROM
+    // loader.
+    InputStyle::DigitalButtons,
     DisplayController::SSD1677,
     800,
     480,
@@ -1801,8 +1816,9 @@ constexpr BoardProfile WS397 = {
     20000000,  // panel datasheet: 20 MHz max write clock
     // SD is 4-bit SDMMC (below), not SPI
     {PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, false, 0},
-    // back(BOOT strap: pull-up input is safe), confirm, left, right, up, down, power(=confirm)
-    {0, 5, PIN_UNASSIGNED, PIN_UNASSIGNED, 4, 6, 5, false},
+    // back(BOOT strap: pull-up input is safe), confirm, left, right, up, down,
+    // power (none: PMIC PWRKEY), powerActiveHigh, adcLadderPin, wakePin (=OK)
+    {0, 5, PIN_UNASSIGNED, PIN_UNASSIGNED, 4, 6, PIN_UNASSIGNED, false, PIN_UNASSIGNED, 5},
     PIN_UNASSIGNED,  // batteryAdc: battery telemetry comes from the AXP2101-class PMIC (below)
     PIN_UNASSIGNED,  // batteryChargeStatus: idem
     2.0f,
@@ -1823,6 +1839,12 @@ constexpr BoardProfile WS397 = {
     // SensorsConfig maps SHT40), imu QMI8658
     {41, 42, 400000, 0x51, 0, 0x6B, 0, RtcType::Pcf85063, ImuType::Qmi8658},
     1.0f,
+    {},                 // power latches: none (PMIC-managed rails)
+    0,                  // displayControllerVariant
+    {},                 // viewableInsets: default
+    false,              // batteryChargeStatusActiveHigh: unused (no /STAT pin)
+    NO_I2C_FRONTLIGHT,
+    38,                 // pmicIrq: AXP2101 IRQ (open-drain, active-low), not an RTC GPIO
 };
 
 constexpr uint32_t panelBytes(const BoardProfile& p) {

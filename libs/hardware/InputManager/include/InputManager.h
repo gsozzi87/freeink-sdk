@@ -32,6 +32,13 @@ class InputManager {
   // logical click/hold classification. False when the board has no such GPIO.
   bool isPowerButtonPhysicallyPressed() const;
 
+  // Current electrical level of the deep-sleep wake GPIO: `input.wakePin` when
+  // the board assigns one (its power key is not a GPIO), else `input.power` —
+  // the same pin PowerManager::wakeSourcePin() arms. Same polarity flag as the
+  // power key (powerActiveHigh; the wake keys assigned so far are active-low).
+  // False when the board has neither. Used by the post-wake hold verification.
+  bool isWakePinPhysicallyPressed() const;
+
   // Press edge since the previous update().
   bool wasPressed(uint8_t buttonIndex) const;
 

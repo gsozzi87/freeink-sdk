@@ -19,19 +19,27 @@ namespace freeink {
 
 class PowerManager {
  public:
+  // The GPIO that wakes the chip from deep sleep: `input.wakePin` when a board
+  // assigns one (its power key is not a GPIO — WS397's PWR is an AXP2101 PWRKEY
+  // input reported on a non-RTC IRQ line, so OK on GPIO5 wakes instead), else
+  // `input.power` as before. PIN_UNASSIGNED when the board has neither.
+  static int8_t wakeSourcePin();
+
   // Arm wake-on-power-button using the SoC-correct wakeup source and the active
-  // board's power pin + polarity (powerActiveHigh -> wake on HIGH, else LOW).
-  // Returns false if the board has no power pin (PIN_UNASSIGNED); nothing armed.
+  // board's wake pin (wakeSourcePin()) + polarity (powerActiveHigh -> wake on
+  // HIGH, else LOW). Returns false if the board has no wake pin (PIN_UNASSIGNED)
+  // or the SoC refused to arm it (not an RTC GPIO on ext1 parts); nothing armed.
   static bool armPowerButtonWakeup();
 
   // Arm deep-sleep wake on an arbitrary set of GPIOs (gpioMask, wakeLow = wake on
   // the low level) using the SoC-correct source (ext1 on Xtensa, gpio on RISC-V).
   // Use for extra wake lines beyond the power button — a touch INT, a second
-  // button, an IO-expander INT. The pins must be RTC-capable on ext1 parts.
-  static void armWakeOnPins(uint64_t gpioMask, bool wakeLow = true);
+  // button, an IO-expander INT. The pins must be RTC-capable on ext1 parts:
+  // returns false (nothing armed) when a pin is not, or when the IDF call fails.
+  static bool armWakeOnPins(uint64_t gpioMask, bool wakeLow = true);
 
-  // Poll the power-button GPIO (raw read, with the matching pull) until released,
-  // so deep sleep isn't immediately cancelled by a still-held press.
+  // Poll the wake GPIO (wakeSourcePin(); raw read, with the matching pull) until
+  // released, so deep sleep isn't immediately cancelled by a still-held press.
   static void waitForPowerButtonRelease();
 
   // Drive every assigned peripheral power-rail enable in the active board

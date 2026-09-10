@@ -3,18 +3,36 @@
 #include <Arduino.h>
 #include <BoardConfig.h>
 #include <driver/gpio.h>
+#include <esp_err.h>
 #include <esp_sleep.h>
 #include <soc/soc_caps.h>
+#if SOC_PM_SUPPORT_EXT1_WAKEUP
+#include <driver/rtc_io.h>
+#endif
 
 namespace freeink {
 namespace {
-int8_t powerPin() { return BoardConfig::ACTIVE.input.power; }
 bool powerActiveHigh() { return BoardConfig::ACTIVE.input.powerActiveHigh; }
 }  // namespace
 
-void PowerManager::armWakeOnPins(uint64_t gpioMask, bool wakeLow) {
+int8_t PowerManager::wakeSourcePin() {
+  const auto& in = BoardConfig::ACTIVE.input;
+  return in.wakePin >= 0 ? in.wakePin : in.power;
+}
+
+bool PowerManager::armWakeOnPins(uint64_t gpioMask, bool wakeLow) {
+  if (gpioMask == 0) return false;
 #if SOC_PM_SUPPORT_EXT1_WAKEUP
-  // Xtensa (S3/S2, classic ESP32): RTC ext1. Pins must be RTC GPIOs.
+  // Xtensa (S3/S2, classic ESP32): RTC ext1. Pins must be RTC GPIOs — the IDF
+  // rejects the whole mask otherwise (ESP_ERR_INVALID_ARG) and nothing is armed,
+  // so check up front and name the offending pin. (S3: GPIO0-21 are RTC.)
+  for (int pin = 0; pin < 64; ++pin) {
+    if (!(gpioMask & (1ULL << pin))) continue;
+    if (pin >= GPIO_NUM_MAX || !rtc_gpio_is_valid_gpio(static_cast<gpio_num_t>(pin))) {
+      log_e("wake pin GPIO%d is not an RTC GPIO: deep-sleep wake NOT armed", pin);
+      return false;
+    }
+  }
   //
   // The classic ESP32 RTC has no "any low" mode — only ESP_EXT1_WAKEUP_ALL_LOW
   // ("wake when ALL selected pins are low"). For a single wake pin (the common
@@ -25,28 +43,38 @@ void PowerManager::armWakeOnPins(uint64_t gpioMask, bool wakeLow) {
 #else
   const esp_sleep_ext1_wakeup_mode_t lowMode = ESP_EXT1_WAKEUP_ANY_LOW;
 #endif
-  esp_sleep_enable_ext1_wakeup(gpioMask, wakeLow ? lowMode : ESP_EXT1_WAKEUP_ANY_HIGH);
+  const esp_err_t err = esp_sleep_enable_ext1_wakeup(gpioMask, wakeLow ? lowMode : ESP_EXT1_WAKEUP_ANY_HIGH);
 #elif SOC_GPIO_SUPPORT_DEEPSLEEP_WAKEUP
   // RISC-V (C3/C6/H2): the deep-sleep "gpio" wakeup source.
-  esp_deep_sleep_enable_gpio_wakeup(gpioMask, wakeLow ? ESP_GPIO_WAKEUP_GPIO_LOW : ESP_GPIO_WAKEUP_GPIO_HIGH);
+  const esp_err_t err =
+      esp_deep_sleep_enable_gpio_wakeup(gpioMask, wakeLow ? ESP_GPIO_WAKEUP_GPIO_LOW : ESP_GPIO_WAKEUP_GPIO_HIGH);
 #else
 #error "FreeInk PowerManager: target has no supported deep-sleep GPIO wakeup source"
 #endif
+  if (err != ESP_OK) {
+    log_e("deep-sleep GPIO wake NOT armed (mask 0x%08lx%08lx): %s", static_cast<unsigned long>(gpioMask >> 32),
+          static_cast<unsigned long>(gpioMask), esp_err_to_name(err));
+    return false;
+  }
+  return true;
 }
 
 bool PowerManager::armPowerButtonWakeup() {
-  const int8_t pin = powerPin();
+  const int8_t pin = wakeSourcePin();
   if (pin < 0) return false;
   const bool activeHigh = powerActiveHigh();
 
   // Hold the idle level with the opposite pull so the line is defined in sleep.
   pinMode(pin, activeHigh ? INPUT_PULLDOWN : INPUT_PULLUP);
-  armWakeOnPins(1ULL << pin, /*wakeLow=*/!activeHigh);
+  if (!armWakeOnPins(1ULL << pin, /*wakeLow=*/!activeHigh)) {
+    log_e("power/wake button on GPIO%d could not be armed as a deep-sleep wake source", pin);
+    return false;
+  }
   return true;
 }
 
 void PowerManager::waitForPowerButtonRelease() {
-  const int8_t pin = powerPin();
+  const int8_t pin = wakeSourcePin();
   if (pin < 0) return;
   const bool activeHigh = powerActiveHigh();
 

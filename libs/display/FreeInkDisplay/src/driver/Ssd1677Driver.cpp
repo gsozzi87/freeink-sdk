@@ -433,24 +433,29 @@ void Ssd1677Driver::displayImpl(EpdBus& bus, const uint8_t* fb, const uint8_t* p
   // the single-pass HALF (0xD7 "_updateFull"); it never runs the multi-flash OTP
   // full waveform (0xF7 is a dead fallback branch there). Promote to HALF where
   // the board has one; boards without (Sticky) promote to their vendor FULL.
-  if (!turnOff) {
-    if (_needsInitialFull) {
-      // First paint after boot/wake must not be a differential FAST: it only drives
-      // pixels that differ from the RED baseline, so it can't clear whatever is
-      // physically on the panel (the boot screen) and that ghosts through. But a HALF
-      // or FULL the caller already asked for is non-differential (BYPASS_RED) and
-      // clears the panel + seeds the baseline on its own — honor it and just consume
-      // the one-shot. Only upgrade a FAST request. This keeps the boot logo (a HALF)
-      // from paying an extra multi-inversion FULL-waveform flash on top of its own.
-      if (mode == RefreshMode::Fast) mode = RefreshMode::Full;
-      _needsInitialFull = false;
+  if (_needsInitialFull) {
+    // First paint after boot/wake must not be a differential FAST: it only drives
+    // pixels that differ from the RED baseline, so it can't clear whatever is
+    // physically on the panel (the boot screen) and that ghosts through. But a HALF
+    // or FULL the caller already asked for is non-differential (BYPASS_RED) and
+    // clears the panel + seeds the baseline on its own — honor it AS ASKED and just
+    // consume the one-shot (an explicit FULL must never come out as a HALF). Only
+    // upgrade a FAST request, to the single-pass HALF where the board has one. This
+    // keeps the boot logo (a HALF) from paying an extra multi-inversion FULL-waveform
+    // flash on top of its own.
+    // Independent of turnOff: the sunlight fading fix routes every display through
+    // the turn-off path, and skipping the promotion there made the first paint after
+    // boot/wake a differential FAST against a baseline the init sequence had just
+    // filled with 0xF7 — the sleep image ghosted through.
+    _needsInitialFull = false;
+    if (mode == RefreshMode::Fast) {
       mode = (_cfg.halfSeqOverride != 0) ? RefreshMode::Half : RefreshMode::Full;
-    } else if (!_isScreenOn && _cfg.fullSeqOverride == 0) {
-      // X4-class cold start: panel asleep -> a (warmed) HALF full-clear. Override
-      // boards skip this — their fast sequence self-powers, so _isScreenOn is false
-      // every page and forcing HALF would make every page a slow full-waveform flash.
-      mode = RefreshMode::Half;
     }
+  } else if (!turnOff && !_isScreenOn && _cfg.fullSeqOverride == 0) {
+    // X4-class cold start: panel asleep -> a (warmed) HALF full-clear. Override
+    // boards skip this — their fast sequence self-powers, so _isScreenOn is false
+    // every page and forcing HALF would make every page a slow full-waveform flash.
+    mode = RefreshMode::Half;
   }
 
   // Leaving grayscale content without the firmware's cleanup: stock parity — the
