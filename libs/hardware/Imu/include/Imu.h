@@ -21,6 +21,12 @@ class Imu {
     float gx, gy, gz;  // angular rate, degrees/second
   };
 
+  // What the part is sampling. The gyro is by far the expensive half (~750 uA
+  // against ~142 uA for the accelerometer alone at 250 Hz), and tilt, shake and
+  // face-down only need acceleration — so a consumer that polls all day asks
+  // for AccelOnly and turns the gyro on for the few screens that use rotation.
+  enum class Mode : uint8_t { Off, AccelOnly, AccelGyro };
+
   // Verifies WHO_AM_I and configures accel + gyro for the active board.
   // Returns false when the active board has no IMU or the part doesn't identify.
   bool begin();
@@ -38,8 +44,46 @@ class Imu {
   // error; allow for a settling transient before trusting samples.
   bool wake();
 
+  // --- QMI8658 extras -------------------------------------------------------
+  // Everything below is a no-op returning false on other parts.
+
+  // Selects what is sampled (see Mode). begin() leaves the part in AccelGyro
+  // for compatibility with the callers that predate this.
+  bool setMode(Mode mode);
+  Mode mode() const { return mode_; }
+
+  // Accelerometer full scale and output rate, as raw CTRL2 fields:
+  //   fsBits 0=±2 g 1=±4 g 2=±8 g 3=±16 g, odrBits 4=500 Hz 5=250 Hz 6=125 Hz.
+  // The tap engine wants >= 200 Hz. Also updates the g/LSB used by read().
+  bool setAccelConfig(uint8_t fsBits, uint8_t odrBits);
+
+  // One CTRL9 command with its handshake (STATUSINT bit7, then CTRL_CMD_ACK).
+  // Returns false if the part never signalled completion.
+  bool ctrl9(uint8_t command);
+
+  // Loads the tap engine parameters (two CTRL9 rounds, see datasheet 10.3).
+  // Must run with the sensors disabled: it does that itself and restores the
+  // previous mode. peakMagThr/udmThr are in g^2 and g.
+  bool configureTap(uint8_t priority, uint8_t peakWindow, uint16_t tapWindow, uint16_t dTapWindow, float alpha,
+                    float gamma, float peakMagThr, float udmThr);
+  // CTRL8.bit0. The engine only runs with the accelerometer enabled.
+  bool enableTap(bool on);
+  // Raw TAP_STATUS (0x59): bits[1:0] 1 = single, 2 = double; bits[5:4] axis;
+  // bit7 direction. Reading it clears the event. 0 when nothing was detected.
+  bool readTapStatus(uint8_t& status);
+
+  // False when begin() saw an implausible gravity vector: the part answers on
+  // I2C but its numbers cannot be trusted, so a consumer should not present
+  // gesture detection as working.
+  bool selfCheckPassed() const { return selfCheckOk_; }
+
  private:
   bool begun_ = false;
+  Mode mode_ = Mode::Off;
+  bool selfCheckOk_ = false;
+  uint8_t ctrl2_ = 0;  // last accelerometer CTRL2 written
+  uint8_t ctrl3_ = 0;  // last gyroscope CTRL3 written
+  float accelScale_ = 0.0f;  // g per LSB for the configured full scale
   // The QMI8658 can legally appear at 0x6A or 0x6B depending on its SA0
   // strap. Keep the address found by begin() instead of repeatedly using the
   // board profile's preferred address.
