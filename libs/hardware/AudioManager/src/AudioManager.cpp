@@ -651,6 +651,15 @@ void AudioManager::taskLoop() {
     if (i2s_channel_write(tx, outBuf, sizeof(outBuf), &written, pdMS_TO_TICKS(200)) != ESP_OK) break;
   }
   setAmp(true);
+  // Y otro tanto DESPUES de levantar el amplificador. Un clase D no pasa de
+  // apagado a amplificando en cero: tarda unas decenas de ms en arrancar, y en
+  // ese rato los primeros samples reales salen mudos. Con clips cortos —el
+  // nombre de una carta, un aviso de dos palabras— eso se oye como que empieza
+  // tarde o que se come la primera sílaba. El silencio es gratis y va antes.
+  for (int i = 0; i < 2; ++i) {
+    size_t written = 0;
+    if (i2s_channel_write(tx, outBuf, sizeof(outBuf), &written, pdMS_TO_TICKS(200)) != ESP_OK) break;
+  }
 
   size_t consumed = 0;
   bool wasPaused = false;
