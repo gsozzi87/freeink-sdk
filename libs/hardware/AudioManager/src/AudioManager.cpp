@@ -6,6 +6,7 @@
 // Vive fuera del #if para que el stub sin audio también enlace.
 namespace freeink {
 uint8_t AudioManager::s_micGain = AudioManager::MIC_GAIN_DEFAULT;
+const char* AudioManager::s_lastCaptureError = nullptr;
 }  // namespace freeink
 
 // Capability-gated like FrontlightManager: devices without FREEINK_CAP_AUDIO
@@ -417,28 +418,51 @@ void AudioManager::teardownI2s() {
   currentRate_ = 0;
 }
 
+// Every early return says WHY. A caller can only report "capture failed", and
+// from the device — no cable, no serial monitor — that one sentence covered a
+// missing mic, a codec that never came up, an I2S port already owned by another
+// AudioManager instance, and a channel that refused to enable. Those are four
+// different problems with four different fixes, and telling them apart by
+// guessing costs a whole test round each time.
 bool AudioManager::beginCapture(uint32_t sampleRate) {
-  if (!captureAvailable()) return false;
-  if (sampleRate < 8000 || sampleRate > 48000) return false;
-  if (!begun_ && !begin()) return false;
+  if (!captureAvailable()) {
+    s_lastCaptureError = "la placa no tiene micrófono por códec";
+    log_e("beginCapture: this board has no codec mic");
+    return false;
+  }
+  if (sampleRate < 8000 || sampleRate > 48000) {
+    s_lastCaptureError = "tasa de muestreo fuera de rango";
+    log_e("beginCapture: rate %u out of range", (unsigned)sampleRate);
+    return false;
+  }
+  if (!begun_ && !begin()) {
+    s_lastCaptureError = "el códec no levantó (begin)";
+    log_e("beginCapture: begin() failed (codec did not come up)");
+    return false;
+  }
   if (capturing_ && currentRate_ == sampleRate) return true;
   // One clock per port: playback (if any) yields, and a running capture at
   // another rate is restarted.
   stop();
   if (capturing_) endCapture();
   if (!ensureI2s(sampleRate) || !rxChan_) {
-    log_e("i2s capture setup failed");
+    s_lastCaptureError = "no se pudo armar el I2S (puerto ocupado o sin canal RX)";
+    log_e("beginCapture: i2s setup failed at %u Hz (port busy or no RX channel)", (unsigned)sampleRate);
     return false;
   }
   codecCapture(true);
   if (!rxEnabled_) {
-    if (i2s_channel_enable((i2s_chan_handle_t)rxChan_) != ESP_OK) {
+    const esp_err_t err = i2s_channel_enable((i2s_chan_handle_t)rxChan_);
+    if (err != ESP_OK) {
+      s_lastCaptureError = "el canal RX no se pudo habilitar";
+      log_e("beginCapture: i2s_channel_enable(rx) -> %d", (int)err);
       codecCapture(false);
       return false;
     }
     rxEnabled_ = true;
   }
   capturing_ = true;
+  s_lastCaptureError = nullptr;
   return true;
 }
 

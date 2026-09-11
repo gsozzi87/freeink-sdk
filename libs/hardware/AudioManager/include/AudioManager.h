@@ -71,6 +71,13 @@ class AudioManager {
   // call this once from setup(). No-op on boards with no ampEnable.
   static void silenceAmp();
 
+  // Por qué falló el último beginCapture(). Existe porque log_e() sale por el
+  // cable y el log que de verdad se lee en esta placa es el que se sube al
+  // servidor (/board/log), y ese lo escribe el consumidor con SU logger: sin
+  // esto, el motivo se quedaba del lado de adentro. Devuelve nullptr si el
+  // último intento salió bien.
+  static const char* lastCaptureError() { return s_lastCaptureError; }
+
   // Full release: stop playback and capture, power the codec down and delete
   // the I2S channels, so a later begin()/play() (or another instance) can
   // re-create the port. powerDown() alone keeps the channels allocated.
@@ -115,6 +122,8 @@ class AudioManager {
     size_t dataStart = 0;
     size_t dataLength = 0;
   };
+
+  static const char* s_lastCaptureError;
 
   static void taskEntry(void* self);
   void taskLoop();
