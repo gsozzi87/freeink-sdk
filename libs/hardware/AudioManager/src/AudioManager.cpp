@@ -269,6 +269,13 @@ void AudioManager::setMicGain(uint8_t percent) {
   applyMicGain();
 }
 
+void AudioManager::silenceAmp() {
+  const auto& cfg = BoardConfig::ACTIVE.audio;
+  if (cfg.ampEnable == BoardConfig::PIN_UNASSIGNED) return;
+  pinMode(cfg.ampEnable, OUTPUT);
+  digitalWrite(cfg.ampEnable, LOW);
+}
+
 void AudioManager::powerDown() {
   const auto& cfg = BoardConfig::ACTIVE.audio;
   if (!begun_) return;
@@ -616,6 +623,19 @@ void AudioManager::taskLoop() {
     size_t written = 0;
     if (i2s_channel_write(tx, outBuf, sizeof(outBuf), &written, pdMS_TO_TICKS(200)) != ESP_OK) break;
   }
+  // Drop the amplifier here, not only in stop(), and BEFORE the channel goes
+  // down. A track that ended on its own used to leave the class-D enable HIGH
+  // while the I2S channel was disabled right under it, so the codec sat with no
+  // MCLK/BCLK and an undefined analog output and the amp faithfully amplified
+  // that — a permanent hiss lasting until something called stop() or
+  // powerDown(). The order matters: silence has just been flushed through the
+  // DMA, so cutting the enable now lands in a quiet moment; cutting it after
+  // i2s_channel_disable() would leave a window of clockless codec into a live
+  // amp, which is the burst of noise this is meant to avoid. Unconditional:
+  // when a capture keeps TX enabled for its BCLK, the speaker still has no
+  // business being live.
+  setAmp(false);
+
   if (!capturing_) {
     i2s_channel_disable(tx);
     chanEnabled_ = false;
@@ -638,6 +658,7 @@ bool AudioManager::play(const WavSource&, bool) { return false; }
 bool AudioManager::playBuffer(const uint8_t*, size_t, bool) { return false; }
 void AudioManager::stop() {}
 void AudioManager::powerDown() {}
+void AudioManager::silenceAmp() {}
 void AudioManager::end() {}
 bool AudioManager::captureAvailable() const { return false; }
 bool AudioManager::beginCapture(uint32_t) { return false; }

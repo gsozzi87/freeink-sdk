@@ -64,6 +64,13 @@ class AudioManager {
   // Codec power-down (CHIPPOWER off). begin() restores it.
   void powerDown();
 
+  // Put the amplifier enable in a known OFF state WITHOUT bringing the audio
+  // stack up. begin() is lazy — it runs on the first sound — so between the
+  // reset and that first clip the enable pin is an unconfigured input, and what
+  // a floating class-D enable does is up to board leakage, not to us. Consumers
+  // call this once from setup(). No-op on boards with no ampEnable.
+  static void silenceAmp();
+
   // Full release: stop playback and capture, power the codec down and delete
   // the I2S channels, so a later begin()/play() (or another instance) can
   // re-create the port. powerDown() alone keeps the channels allocated.
