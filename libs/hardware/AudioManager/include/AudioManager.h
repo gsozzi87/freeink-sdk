@@ -45,6 +45,12 @@ class AudioManager {
 
   // Initializes the codec + enable pin. Returns false when the active board
   // has no audio path (callers can treat audio as absent).
+  // Suelta el puerto I2S y los canales. Hace falta de verdad: `s_portOwner` es
+  // un puntero crudo a la instancia que tiene el puerto, así que una instancia
+  // que se destruye sin soltarlo lo dejaría colgado y el próximo que le pidiera
+  // el puerto escribiría sobre memoria liberada.
+  ~AudioManager();
+
   bool begin();
   bool present() const;
 
@@ -124,6 +130,17 @@ class AudioManager {
   };
 
   static const char* s_lastCaptureError;
+
+  // El puerto I2S es UNO SOLO (I2S_NUM_0) y cada AudioManager intenta crear sus
+  // canales ahí. El primero que lo consigue se lo queda, porque stop() NO
+  // libera los canales — sólo end() lo hace. Con varias instancias vivas
+  // (clics, pitidos, voz, música, grabadora), la primera que sonó dejaba a
+  // todas las demás afuera para siempre: i2s_new_channel devolvía error y el
+  // micrófono "fallaba" sin que hubiera nada malo en el micrófono.
+  //
+  // Así que el puerto tiene dueño explícito y se lo cede: quien lo necesita se
+  // lo pide al que lo tiene.
+  static AudioManager* s_portOwner;
 
   static void taskEntry(void* self);
   void taskLoop();

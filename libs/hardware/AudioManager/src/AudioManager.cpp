@@ -7,6 +7,7 @@
 namespace freeink {
 uint8_t AudioManager::s_micGain = AudioManager::MIC_GAIN_DEFAULT;
 const char* AudioManager::s_lastCaptureError = nullptr;
+AudioManager* AudioManager::s_portOwner = nullptr;
 }  // namespace freeink
 
 // Capability-gated like FrontlightManager: devices without FREEINK_CAP_AUDIO
@@ -270,6 +271,10 @@ void AudioManager::setMicGain(uint8_t percent) {
   applyMicGain();
 }
 
+AudioManager::~AudioManager() {
+  if (s_portOwner == this) end();
+}
+
 void AudioManager::silenceAmp() {
   const auto& cfg = BoardConfig::ACTIVE.audio;
   if (cfg.ampEnable == BoardConfig::PIN_UNASSIGNED) return;
@@ -364,6 +369,17 @@ bool AudioManager::ensureI2s(uint32_t sampleRate) {
     return true;
   }
 
+  // Nadie más puede tener el puerto: si otra instancia lo tiene, se le pide.
+  // end() la deja limpia (para su reproducción, suelta la captura, apaga el
+  // códec y borra sus canales), que es exactamente lo que hace falta para que
+  // i2s_new_channel de abajo tenga con qué. Sin esto, la primera instancia que
+  // sonó en toda la sesión se quedaba con I2S_NUM_0 y ninguna otra volvía a
+  // conseguirlo: stop() no suelta los canales, sólo end().
+  if (s_portOwner && s_portOwner != this) {
+    log_w("i2s: el puerto lo tenía otra instancia, se le pide");
+    s_portOwner->end();
+  }
+
   i2s_chan_config_t chanCfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
   // Without auto_clear the DMA replays its last buffers on underrun — heard
   // as a looping stutter after playback stops.
@@ -398,10 +414,15 @@ bool AudioManager::ensureI2s(uint32_t sampleRate) {
   chanEnabled_ = true;
   rxEnabled_ = false;
   currentRate_ = sampleRate;
+  s_portOwner = this;  // desde acá, el puerto es de esta instancia
   return true;
 }
 
 void AudioManager::teardownI2s() {
+  // Se suelta la propiedad del puerto ANTES de borrar los canales: si esta
+  // instancia lo tenía, al salir de acá no lo tiene nadie y la próxima que lo
+  // pida lo va a poder crear.
+  if (s_portOwner == this) s_portOwner = nullptr;
   if (rxChan_) {
     i2s_chan_handle_t rx = (i2s_chan_handle_t)rxChan_;
     if (rxEnabled_) i2s_channel_disable(rx);
@@ -681,6 +702,7 @@ void AudioManager::setVolume(uint8_t) {}
 bool AudioManager::play(const WavSource&, bool) { return false; }
 bool AudioManager::playBuffer(const uint8_t*, size_t, bool) { return false; }
 void AudioManager::stop() {}
+AudioManager::~AudioManager() {}
 void AudioManager::powerDown() {}
 void AudioManager::silenceAmp() {}
 void AudioManager::end() {}
