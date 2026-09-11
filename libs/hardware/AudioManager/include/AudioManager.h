@@ -67,6 +67,15 @@ class AudioManager {
   void stop();
   bool isPlaying() const { return playing_; }
 
+  // Pausa de verdad: la tarea deja de leer de la fuente y de escribir al I2S,
+  // baja el amplificador y apaga el canal TX. Antes "pausar" era bajar el
+  // volumen a 0: el MP3 se seguía decodificando y el I2S seguía escribiendo a
+  // velocidad de hardware, así que una pausa larga gastaba lo mismo que sonar y
+  // la pista igual se terminaba sola. La posición se mantiene: resume() vuelve
+  // exactamente donde estaba.
+  void setPaused(bool paused);
+  bool isPaused() const { return paused_; }
+
   // Codec power-down (CHIPPOWER off). begin() restores it.
   void powerDown();
 
@@ -160,6 +169,8 @@ class AudioManager {
   bool begun_ = false;
   volatile bool playing_ = false;
   volatile bool stopRequested_ = false;
+  volatile bool paused_ = false;
+  volatile bool pausedIdle_ = false;  // la tarea ya dejó la línea en silencio
   TaskHandle_t task_ = nullptr;
 
   WavSource source_;

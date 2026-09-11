@@ -550,6 +550,8 @@ bool AudioManager::play(const WavSource& source, bool loop) {
   wav_ = info;
   loop_ = loop;
   stopRequested_ = false;
+  paused_ = false;
+  pausedIdle_ = false;
   playing_ = true;
 
   // Same shape as the OEM "musicTask" (high priority, core 0 — the Arduino
@@ -582,6 +584,9 @@ bool AudioManager::playBuffer(const uint8_t* data, size_t len, bool loop) {
 }
 
 void AudioManager::stop() {
+  // Levantar la pausa primero: una tarea pausada duerme de a 100 ms sin tocar
+  // el I2S, y el bucle de espera de abajo la dejaría llegar al tope.
+  paused_ = false;
   if (playing_) {
     stopRequested_ = true;
     // The task deletes itself; wait for it to drain (bounded).
@@ -595,6 +600,18 @@ void AudioManager::stop() {
   // powered and hissing until the next play.
   setAmp(false);
   codecMute(true);
+}
+
+void AudioManager::setPaused(const bool paused) {
+  if (paused_ == paused) return;
+  paused_ = paused;
+  // El trabajo lo hace la tarea (es la dueña del canal TX): acá sólo se
+  // levanta la bandera y, al pausar, se espera un momento a que la tarea deje
+  // la línea en silencio para que el amplificador no se apague con señal
+  // encima (chasquido del clase D).
+  if (paused) {
+    for (int i = 0; i < 50 && playing_ && !pausedIdle_; ++i) vTaskDelay(pdMS_TO_TICKS(10));
+  }
 }
 
 void AudioManager::taskEntry(void* self) { static_cast<AudioManager*>(self)->taskLoop(); }
@@ -615,7 +632,43 @@ void AudioManager::taskLoop() {
   setAmp(true);
 
   size_t consumed = 0;
+  bool wasPaused = false;
   while (!stopRequested_) {
+    if (paused_) {
+      if (!wasPaused) {
+        // Vaciar los descriptores del DMA con silencio ANTES de bajar el amp y
+        // apagar el canal: un canal meramente detenido repite lo último que
+        // quedó en el DMA, y el clase D chasquea si se apaga con señal.
+        memset(outBuf, 0, sizeof(outBuf));
+        for (int i = 0; i < 4; ++i) {
+          size_t written = 0;
+          if (i2s_channel_write(tx, outBuf, sizeof(outBuf), &written, pdMS_TO_TICKS(200)) != ESP_OK) break;
+        }
+        setAmp(false);
+        if (chanEnabled_ && !capturing_) {
+          i2s_channel_disable(tx);
+          chanEnabled_ = false;
+        }
+        wasPaused = true;
+        pausedIdle_ = true;
+      }
+      vTaskDelay(pdMS_TO_TICKS(100));
+      continue;
+    }
+    if (wasPaused) {
+      pausedIdle_ = false;
+      if (!chanEnabled_) {
+        if (i2s_channel_enable(tx) != ESP_OK) break;
+        chanEnabled_ = true;
+      }
+      memset(outBuf, 0, sizeof(outBuf));
+      for (int i = 0; i < 2; ++i) {
+        size_t written = 0;
+        if (i2s_channel_write(tx, outBuf, sizeof(outBuf), &written, pdMS_TO_TICKS(200)) != ESP_OK) break;
+      }
+      setAmp(true);
+      wasPaused = false;
+    }
     size_t want = READ_CHUNK;
     if (wav_.dataLength > 0) {
       const size_t left = wav_.dataLength - consumed;
@@ -681,11 +734,13 @@ void AudioManager::taskLoop() {
   // business being live.
   setAmp(false);
 
-  if (!capturing_) {
+  if (!capturing_ && chanEnabled_) {
     i2s_channel_disable(tx);
     chanEnabled_ = false;
   }
 
+  paused_ = false;
+  pausedIdle_ = false;
   playing_ = false;
   task_ = nullptr;
   vTaskDelete(nullptr);
@@ -702,6 +757,7 @@ void AudioManager::setVolume(uint8_t) {}
 bool AudioManager::play(const WavSource&, bool) { return false; }
 bool AudioManager::playBuffer(const uint8_t*, size_t, bool) { return false; }
 void AudioManager::stop() {}
+void AudioManager::setPaused(bool) {}
 AudioManager::~AudioManager() {}
 void AudioManager::powerDown() {}
 void AudioManager::silenceAmp() {}
