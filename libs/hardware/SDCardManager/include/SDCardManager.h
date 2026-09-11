@@ -60,6 +60,11 @@ class SDCardManager {
   bool rmdir(const char* path) { return vol().rmdir(path); }
   bool rename(const char* path, const char* newPath) { return vol().rename(path, newPath); }
 
+  // Sufijo del archivo temporal de writeFile(). Público porque quien limpie la
+  // tarjeta tiene que saber que estos archivos son basura recuperable y no
+  // borrarlos a ciegas mientras hay una escritura a medio camino.
+  static constexpr const char* TEMP_SUFFIX = ".tmp";
+
   bool openFileForRead(const char* moduleName, const char* path, FsFile& file);
   bool openFileForRead(const char* moduleName, const std::string& path, FsFile& file);
   bool openFileForRead(const char* moduleName, const String& path, FsFile& file);

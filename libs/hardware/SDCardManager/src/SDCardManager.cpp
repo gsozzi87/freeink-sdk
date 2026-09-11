@@ -241,6 +241,16 @@ String SDCardManager::readFile(const char* path) {
     return {""};
   }
 
+  // Recovery for a swap that was interrupted (see writeFile): the target is
+  // gone but the temporary holds the content that was about to replace it.
+  // Without this the two-step write would be worse than what it replaced —
+  // a crash mid-swap would look exactly like a missing file.
+  const String tmp = String(path) + TEMP_SUFFIX;
+  if (!vol().exists(path) && vol().exists(tmp.c_str())) {
+    if (Serial) Serial.printf("[SD] recovering %s from an interrupted write\n", path);
+    vol().rename(tmp.c_str(), path);
+  }
+
   FsFile f;
   if (!openFileForRead("SD", path, f)) {
     return {""};
@@ -321,25 +331,50 @@ size_t SDCardManager::readFileToBuffer(const char* path, char* buffer, const siz
   return total;
 }
 
+// Write through a temporary and swap, instead of deleting the target first.
+//
+// This used to remove(path) and then open it for writing. Everything between
+// those two calls was a window with NO copy of the file on the card at all: an
+// open that failed, a short write, a card pulled out, a battery that ran out.
+// Consumers store settings, the offline queue and the device's own credentials
+// through here, so that window could cost the token the device identifies
+// itself with — and losing that is not a corrupted preference, it is a device
+// that no longer knows who it is.
+//
+// FAT rename is not atomic either, so the temporary is deliberately left behind
+// on the card when the swap is interrupted, and readFile() below recovers from
+// it. That pair is what makes the sequence survivable, not the rename alone.
 bool SDCardManager::writeFile(const char* path, const String& content) {
   if (!initialized) {
     if (Serial) Serial.println("SDCardManager: not initialized; cannot write file");
     return false;
   }
 
-  if (vol().exists(path)) {
-    vol().remove(path);
-  }
+  String tmp = String(path) + TEMP_SUFFIX;
+  if (vol().exists(tmp.c_str())) vol().remove(tmp.c_str());
 
   FsFile f;
-  if (!openFileForWrite("SD", path, f)) {
-    if (Serial) Serial.printf("Failed to open file for write: %s\n", path);
+  if (!openFileForWrite("SD", tmp.c_str(), f)) {
+    if (Serial) Serial.printf("Failed to open temp file for write: %s\n", tmp.c_str());
+    return false;
+  }
+  const size_t written = f.print(content);
+  f.close();
+  if (written != content.length()) {
+    // Short write: the old file is still whole, so throw away the half-written
+    // one and report the failure rather than swapping rubbish into place.
+    vol().remove(tmp.c_str());
+    if (Serial) Serial.printf("Short write (%u of %u): %s\n", (unsigned)written, (unsigned)content.length(), path);
     return false;
   }
 
-  const size_t written = f.print(content);
-  f.close();
-  return written == content.length();
+  if (vol().exists(path)) vol().remove(path);
+  if (!vol().rename(tmp.c_str(), path)) {
+    // The temporary holds the good content; readFile() will pick it up.
+    if (Serial) Serial.printf("Failed to swap temp into place: %s\n", path);
+    return false;
+  }
+  return true;
 }
 
 bool SDCardManager::ensureDirectoryExists(const char* path) {
