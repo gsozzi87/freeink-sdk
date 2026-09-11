@@ -204,12 +204,30 @@ bool Imu::begin() {
   // one g. Anything far from that means the numbers are not acceleration (wrong
   // byte order, wrong scale, a part that answers but is not configured), and a
   // consumer must not offer gestures as if they worked.
+  //
+  // The wait is the whole point, and a single delay(20) was not enough. The
+  // config above leaves the accelerometer at 28 Hz, so one sample takes ~36 ms:
+  // reading after 20 ms returns whatever the output registers still hold. On a
+  // WARM restart — which is the common case, not the rare one — those registers
+  // hold data from the previous session's range (a consumer that picked +/-8 g
+  // leaves it there; the part is not reset by a firmware restart), and reading
+  // +/-8 g counts through the +/-2 g scale set here divides the magnitude by
+  // four: ~0.25 g, comfortably outside the window, so a perfectly healthy part
+  // failed its own sanity check and every gesture built on selfCheckPassed()
+  // stayed off for the whole session.
+  //
+  // So: sample until the numbers are fresh, a few periods at a time, and take
+  // the first plausible one. Worst case this costs ~200 ms once, at begin().
   selfCheckOk_ = false;
-  delay(20);
-  Sample probe = {};
-  if (read(probe)) {
+  constexpr int SELF_CHECK_TRIES = 5;
+  constexpr uint32_t SAMPLE_PERIOD_MS = 40;  // one period at 28 Hz, rounded up
+  for (int attempt = 0; attempt < SELF_CHECK_TRIES && !selfCheckOk_; ++attempt) {
+    delay(SAMPLE_PERIOD_MS);
+    Sample probe = {};
+    if (!read(probe)) continue;
     const float magnitude = sqrtf(probe.ax * probe.ax + probe.ay * probe.ay + probe.az * probe.az);
     selfCheckOk_ = magnitude > 0.6f && magnitude < 1.6f;
+    lastSelfCheckG_ = magnitude;
   }
   return true;
 }

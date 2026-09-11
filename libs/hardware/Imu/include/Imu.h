@@ -75,12 +75,18 @@ class Imu {
   // False when begin() saw an implausible gravity vector: the part answers on
   // I2C but its numbers cannot be trusted, so a consumer should not present
   // gesture detection as working.
+  // La magnitud que midió el autochequeo, en g. Sirve para que el consumidor
+  // pueda MOSTRAR por qué falló en vez de decir sólo "no responde": un 0,25
+  // grita "escala equivocada" y un 0,00 grita "el chip no contesta".
+  float lastSelfCheckG() const { return lastSelfCheckG_; }
+
   bool selfCheckPassed() const { return selfCheckOk_; }
 
  private:
   bool begun_ = false;
   Mode mode_ = Mode::Off;
   bool selfCheckOk_ = false;
+  float lastSelfCheckG_ = 0.0f;
   uint8_t ctrl2_ = 0;  // last accelerometer CTRL2 written
   uint8_t ctrl3_ = 0;  // last gyroscope CTRL3 written
   float accelScale_ = 0.0f;  // g per LSB for the configured full scale
