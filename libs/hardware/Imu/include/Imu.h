@@ -69,8 +69,14 @@ class Imu {
   // CTRL8.bit0. The engine only runs with the accelerometer enabled.
   bool enableTap(bool on);
   // Raw TAP_STATUS (0x59): bits[1:0] 1 = single, 2 = double; bits[5:4] axis;
-  // bit7 direction. Reading it clears the event. 0 when nothing was detected.
+  // bit7 direction. OJO: reading it does NOT clear it — it keeps describing the
+  // last tap until the next one. Use readTapEvent() to know whether a NEW tap
+  // happened.
   bool readTapStatus(uint8_t& status);
+  // The tap EVENT flag (STATUS1 bit1, cleared by reading) plus the TAP_STATUS
+  // byte that describes it. `tapped` is true only for a tap that happened since
+  // the previous call; `status` is the raw 0x59 byte either way.
+  bool readTapEvent(bool& tapped, uint8_t& status);
 
   // False when begin() saw an implausible gravity vector: the part answers on
   // I2C but its numbers cannot be trusted, so a consumer should not present
