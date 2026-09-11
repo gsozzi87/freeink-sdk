@@ -286,6 +286,13 @@ void AudioManager::powerDown() {
   const auto& cfg = BoardConfig::ACTIVE.audio;
   if (!begun_) return;
   stop();
+  // El riel del códec también es compartido: cortarlo mientras otra instancia
+  // tiene el puerto deja sonando a nadie. Se marca como apagada esta instancia
+  // y se deja el hardware como está.
+  if (otherOwnsPort()) {
+    begun_ = false;
+    return;
+  }
   if (cfg.output == BoardConfig::AudioOutput::I2sEs8311) {
     // Like M5Unified's disable path: drop the amp and the codec rail.
     setAmp(false);
@@ -595,12 +602,26 @@ void AudioManager::stop() {
     }
   }
   // Drop the amp and mute the DAC so nothing residual reaches the output
-  // between alarms. Unconditionally: a stop() after a capture-only session (the
-  // amp is enabled by begin(), not by playback) used to leave the amplifier
-  // powered and hissing until the next play.
-  setAmp(false);
-  codecMute(true);
+  // between alarms. A stop() after a capture-only session (the amp is enabled
+  // by begin(), not by playback) used to leave the amplifier powered and
+  // hissing until the next play.
+  //
+  // PERO no si el puerto lo tiene OTRA instancia: el amplificador y el códec
+  // son UNO SOLO para toda la placa. Cada clase tiene su AudioManager (clics,
+  // pitidos, voz, música, micrófono) y la que perdió el puerto seguía bajando
+  // el amp y muteando el DAC por debajo de la que está sonando — la música se
+  // quedaba muda sin que nadie la hubiera parado.
+  if (!otherOwnsPort()) {
+    setAmp(false);
+    codecMute(true);
+  }
 }
+
+// El puerto lo tiene otra instancia viva: lo que sea del códec o del
+// amplificador no es nuestro para tocarlo.
+bool AudioManager::otherOwnsPort() const { return s_portOwner != nullptr && s_portOwner != this; }
+
+bool AudioManager::portBusy() { return s_portOwner != nullptr && (s_portOwner->playing_ || s_portOwner->capturing_); }
 
 void AudioManager::setPaused(const bool paused) {
   if (paused_ == paused) return;

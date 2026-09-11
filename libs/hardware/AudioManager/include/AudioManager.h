@@ -86,6 +86,14 @@ class AudioManager {
   // call this once from setup(). No-op on boards with no ampEnable.
   static void silenceAmp();
 
+  // ¿Hay alguien REPRODUCIENDO o GRABANDO ahora mismo? Distinto de "el puerto
+  // está tomado": stop() no suelta los canales (sólo end() lo hace), así que
+  // después del primer sonido el puerto queda siempre asignado a alguien y
+  // preguntarle al driver si se puede crear un canal da que no para siempre.
+  // ensureI2s() ya sabe pedírselo al dueño; lo que hay que saber antes de
+  // pisar a otro es si ese otro está usándolo de verdad.
+  static bool portBusy();
+
   // Por qué falló el último beginCapture(). Existe porque log_e() sale por el
   // cable y el log que de verdad se lee en esta placa es el que se sube al
   // servidor (/board/log), y ese lo escribe el consumidor con SU logger: sin
@@ -165,6 +173,7 @@ class AudioManager {
   void codecMute(bool mute);
   void codecCapture(bool on);  // ES8311 ADC / PGA power and mic routing
   void setAmp(bool on);
+  bool otherOwnsPort() const;
 
   bool begun_ = false;
   volatile bool playing_ = false;
