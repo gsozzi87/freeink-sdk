@@ -28,7 +28,13 @@ constexpr size_t READ_CHUNK = 1024;        // mono source bytes per loop pass
 // Silencio antes y despues de levantar el amplificador, en milisegundos (ver
 // taskLoop): antes iba en buffers, que duran la mitad o el triple segun la tasa.
 constexpr uint32_t AMP_PRIME_MS = 32;
-constexpr uint32_t AMP_SETTLE_MS = 40;
+// 150 ms, no 40. El log del aparato mostro clics de 38 ms reproducidos de punta
+// a punta ("sono 0: 1824 muestras ... 185 ms") que NADIE oyo, mientras el pitido
+// de 160 ms repetido si se oye y a la voz de las cartas "se le comia la primera
+// silaba". Todo lo que dura menos de ~100 ms despues del unmute del DAC y del
+// enable del clase D se pierde: el ES8311 sube el volumen con una rampa al
+// salir del mute y el amplificador tarda en arrancar. El silencio es gratis.
+constexpr uint32_t AMP_SETTLE_MS = 150;
 
 // ES8388 playback init recovered from the Murphy OEM firmware — exact register
 // order matters (staged mute -> clocks/format -> mixers -> power -> unmute).
