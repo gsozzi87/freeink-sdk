@@ -43,6 +43,7 @@ constexpr uint8_t QMI8658_REG_CTRL8 = 0x09;
 constexpr uint8_t QMI8658_REG_CTRL9 = 0x0A;
 constexpr uint8_t QMI8658_REG_CAL1_L = 0x0B;  // CAL1_L..CAL4_H are 0x0B..0x12
 constexpr uint8_t QMI8658_REG_STATUSINT = 0x2D;
+constexpr uint8_t QMI8658_REG_STATUS1 = 0x2F;  // bit1 TAP: se limpia al leer (TAP_STATUS no)
 constexpr uint8_t QMI8658_REG_TAP_STATUS = 0x59;
 constexpr uint8_t QMI8658_REG_AX_L = 0x35;
 constexpr uint8_t QMI8658_REG_GX_L = 0x3B;
@@ -72,6 +73,7 @@ constexpr uint8_t QMI8658_CTRL8_TAP_EN = 0x01;
 constexpr uint8_t QMI8658_CTRL9_CMD_ACK = 0x00;
 constexpr uint8_t QMI8658_CTRL9_CMD_CONFIGURE_TAP = 0x0C;
 constexpr uint8_t QMI8658_STATUSINT_CMD_DONE = 0x80;
+constexpr uint8_t QMI8658_STATUS1_TAP = 0x02;
 // LSM6DS3: ODR bits [7:4] = 0000b powers the sensor down; full-scale bits are
 // retained, so restoring the configured CTRL value resumes sampling.
 constexpr uint8_t CTRL_ODR_POWER_DOWN = 0x00;
@@ -421,6 +423,20 @@ bool Imu::readTapStatus(uint8_t& status) {
   return readRegs(addr_, QMI8658_REG_TAP_STATUS, &status, 1);
 }
 
+bool Imu::readTapEvent(bool& tapped, uint8_t& status) {
+  tapped = false;
+  status = 0;
+  if (!begun_ || addr_ == 0 || BoardConfig::ACTIVE.sensors.imuType != BoardConfig::ImuType::Qmi8658) return false;
+  // STATUS1 es el registro de EVENTOS (any-motion, no-motion, pedómetro, golpe)
+  // y se limpia al leerlo: por eso sirve de flanco. TAP_STATUS sólo describe el
+  // último golpe (simple/doble, eje, sentido) y se queda así hasta el próximo,
+  // que es lo que hacía que un golpe de hace media hora siguiera "contestando".
+  uint8_t st1 = 0;
+  if (!readRegs(addr_, QMI8658_REG_STATUS1, &st1, 1)) return false;
+  tapped = (st1 & QMI8658_STATUS1_TAP) != 0;
+  return readRegs(addr_, QMI8658_REG_TAP_STATUS, &status, 1);
+}
+
 }  // namespace freeink
 
 #else  // FREEINK_CAP_IMU — IMU absent.
@@ -436,6 +452,11 @@ bool Imu::ctrl9(uint8_t) { return false; }
 bool Imu::configureTap(uint8_t, uint8_t, uint16_t, uint16_t, float, float, float, float) { return false; }
 bool Imu::enableTap(bool) { return false; }
 bool Imu::readTapStatus(uint8_t& status) {
+  status = 0;
+  return false;
+}
+bool Imu::readTapEvent(bool& tapped, uint8_t& status) {
+  tapped = false;
   status = 0;
   return false;
 }

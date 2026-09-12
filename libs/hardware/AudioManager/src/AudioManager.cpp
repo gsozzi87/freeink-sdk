@@ -25,6 +25,16 @@ namespace {
 
 constexpr uint32_t CODEC_I2C_HZ = 100000;  // OEM bus speed (shared with touch)
 constexpr size_t READ_CHUNK = 1024;        // mono source bytes per loop pass
+// Silencio antes y despues de levantar el amplificador, en milisegundos (ver
+// taskLoop): antes iba en buffers, que duran la mitad o el triple segun la tasa.
+constexpr uint32_t AMP_PRIME_MS = 32;
+// 150 ms, no 40. El log del aparato mostro clics de 38 ms reproducidos de punta
+// a punta ("sono 0: 1824 muestras ... 185 ms") que NADIE oyo, mientras el pitido
+// de 160 ms repetido si se oye y a la voz de las cartas "se le comia la primera
+// silaba". Todo lo que dura menos de ~100 ms despues del unmute del DAC y del
+// enable del clase D se pierde: el ES8311 sube el volumen con una rampa al
+// salir del mute y el amplificador tarda en arrancar. El silencio es gratis.
+constexpr uint32_t AMP_SETTLE_MS = 150;
 
 // ES8388 playback init recovered from the Murphy OEM firmware — exact register
 // order matters (staged mute -> clocks/format -> mixers -> power -> unmute).
@@ -645,8 +655,21 @@ void AudioManager::taskLoop() {
 
   // Prime the line with silence, then raise the amp: the AW8737A pops loudly
   // when enabled against an idle or just-started I2S line.
+  //
+  // El silencio se mide en MILISEGUNDOS, no en buffers. Cada escritura son 512
+  // cuadros: a 16 kHz eso son 32 ms, pero a 48 kHz son 10,7 ms, y los clics de
+  // la interfaz se generan justo a 48 kHz. Con dos buffers el amplificador
+  // recien estaba arrancando cuando ya habia terminado el clic de 26 ms: se oia
+  // apenas o no se oia nada. Con los milisegundos fijos da igual la tasa.
+  const uint32_t rate = currentRate_ > 0 ? currentRate_ : 16000;
+  const size_t framesPerWrite = sizeof(outBuf) / (2 * sizeof(int16_t));
+  const auto writesFor = [&](const uint32_t ms) {
+    const size_t frames = static_cast<size_t>(rate) * ms / 1000;
+    return static_cast<int>((frames + framesPerWrite - 1) / framesPerWrite);
+  };
   memset(outBuf, 0, sizeof(outBuf));
-  for (int i = 0; i < 2; ++i) {
+  const int preWrites = writesFor(AMP_PRIME_MS);
+  for (int i = 0; i < preWrites; ++i) {
     size_t written = 0;
     if (i2s_channel_write(tx, outBuf, sizeof(outBuf), &written, pdMS_TO_TICKS(200)) != ESP_OK) break;
   }
@@ -656,7 +679,8 @@ void AudioManager::taskLoop() {
   // ese rato los primeros samples reales salen mudos. Con clips cortos —el
   // nombre de una carta, un aviso de dos palabras— eso se oye como que empieza
   // tarde o que se come la primera sílaba. El silencio es gratis y va antes.
-  for (int i = 0; i < 2; ++i) {
+  const int postWrites = writesFor(AMP_SETTLE_MS);
+  for (int i = 0; i < postWrites; ++i) {
     size_t written = 0;
     if (i2s_channel_write(tx, outBuf, sizeof(outBuf), &written, pdMS_TO_TICKS(200)) != ESP_OK) break;
   }
