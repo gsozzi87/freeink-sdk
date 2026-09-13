@@ -1,5 +1,7 @@
 #include "SDCardManager.h"
 
+#include <algorithm>
+
 #include <BoardConfig.h>
 #include <driver/gpio.h>
 #include <SPI.h>
@@ -256,13 +258,45 @@ String SDCardManager::readFile(const char* path) {
     return {""};
   }
 
-  String content = "";
-  constexpr size_t maxSize = 50000;  // Limit to 50KB
+  // Two things were wrong here and both hurt on a device whose caches are JSON.
+  //
+  // 1) The cap was a flat 50 KB and the truncation was SILENT: a hub cache or a
+  //    news pack that grew past it came back cut in half, the JSON parse failed,
+  //    and from the outside the cache simply "stopped working" with no clue why.
+  //    The cap now scales with the heap that is actually free and says so in the
+  //    log when it bites.
+  // 2) The read was one char at a time into a String that grew by one. Arduino's
+  //    String reallocates as it grows, so this was quadratic: 50 KB meant
+  //    thousands of reallocations and copies. Now the size is known up front
+  //    (the file says it), reserved once, and read in blocks.
+  const size_t fileSize = static_cast<size_t>(f.size());
+  // Never take more than a quarter of what is free: the caller is going to parse
+  // this into a JsonDocument, so the content lives twice for a moment.
+  const size_t headroom = ESP.getMaxAllocHeap() / 4;
+  const size_t maxSize = std::min<size_t>(std::max<size_t>(headroom, 16 * 1024), 192 * 1024);
+  const size_t want = std::min(fileSize, maxSize);
+  if (fileSize > want) {
+    if (Serial) {
+      Serial.printf("[%lu] [SD] %s is %u B and only %u B fit: the content IS truncated\n", millis(), path,
+                    static_cast<unsigned>(fileSize), static_cast<unsigned>(want));
+    }
+  }
+
+  String content;
+  if (!content.reserve(want + 1)) {
+    f.close();
+    if (Serial) Serial.printf("[%lu] [SD] no heap for %u B of %s\n", millis(), static_cast<unsigned>(want), path);
+    return {""};
+  }
+  char chunk[512];
   size_t readSize = 0;
-  while (f.available() && readSize < maxSize) {
-    const char c = static_cast<char>(f.read());
-    content += c;
-    readSize++;
+  while (readSize < want) {
+    const size_t n = std::min(sizeof(chunk) - 1, want - readSize);
+    const int got = f.read(chunk, n);
+    if (got <= 0) break;
+    chunk[got] = 0;
+    content += chunk;
+    readSize += static_cast<size_t>(got);
   }
   f.close();
   return content;
