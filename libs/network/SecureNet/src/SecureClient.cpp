@@ -7,7 +7,31 @@
 #include <wolfssl/ssl.h>
 #endif
 
+#include <lwip/sockets.h>
+
 namespace freeink {
+
+uint16_t SecureClient::s_keepIdle = 0;
+uint16_t SecureClient::s_keepInterval = 0;
+uint16_t SecureClient::s_keepCount = 0;
+
+void SecureClient::setKeepAlive(const uint16_t idleSeconds, const uint16_t intervalSeconds, const uint16_t count) {
+  s_keepIdle = idleSeconds;
+  s_keepInterval = intervalSeconds;
+  s_keepCount = count;
+}
+
+void SecureClient::applyKeepAlive() {
+  if (s_keepIdle == 0 || s_keepInterval == 0 || s_keepCount == 0) return;
+  int on = 1;
+  int idle = s_keepIdle;
+  int interval = s_keepInterval;
+  int count = s_keepCount;
+  _transport.setSocketOption(SOL_SOCKET, SO_KEEPALIVE, &on, sizeof(on));
+  _transport.setOption(TCP_KEEPIDLE, &idle);
+  _transport.setOption(TCP_KEEPINTVL, &interval);
+  _transport.setOption(TCP_KEEPCNT, &count);
+}
 
 bool SecureClient::tls13Available() {
 #if defined(FREEINK_NET_WOLFSSL)
@@ -73,6 +97,7 @@ int SecureClient::connectWithMethod(const char* host, uint16_t port, void* metho
     if (Serial) Serial.printf("[SecureClient] TCP connect failed (%s): %s:%u\n", label, host, port);
     return 0;
   }
+  applyKeepAlive();
 
   auto* ctx = wolfSSL_CTX_new(static_cast<WOLFSSL_METHOD*>(method));
   if (!ctx) {

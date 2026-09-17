@@ -51,8 +51,22 @@ class SecureClient : public Client {
   // True if the library was built with wolfSSL TLS 1.3 support enabled.
   static bool tls13Available();
 
+  // TCP keepalive on the transport socket, applied right after connect() for
+  // every SecureClient from then on. Idle and interval are seconds; count is
+  // how many unanswered probes abort the socket. 0 idle = off (the default,
+  // upstream behaviour). A host whose home router silently drops a downlink
+  // otherwise waits out the whole request timeout on a peer that stopped
+  // answering; with this the socket dies after idle + interval * count seconds
+  // and the caller's retry runs on a fresh connection. A slow but alive server
+  // keeps acking the probes, so it never fires early.
+  static void setKeepAlive(uint16_t idleSeconds, uint16_t intervalSeconds, uint16_t count);
+
  private:
   int connectWithMethod(const char* host, uint16_t port, void* method, const char* label);
+  void applyKeepAlive();
+  static uint16_t s_keepIdle;
+  static uint16_t s_keepInterval;
+  static uint16_t s_keepCount;
 
   WiFiClient _transport;
   const char* _rootCA = nullptr;
