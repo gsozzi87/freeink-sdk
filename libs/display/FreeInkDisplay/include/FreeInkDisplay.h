@@ -290,6 +290,13 @@ class FreeInkDisplay {
     _bus.setBusyWaitSliceHook(sliceHook);
   }
 
+  // Upper bound for one BUSY wait and the count of waits that hit it since
+  // boot. See EpdBus::setBusyTimeoutMs: a panel with BUSY stuck busy blocks
+  // every command for the bound, so a host that knows its longest healthy
+  // waveform can trade the 30 s default for something it can survive.
+  void setBusyTimeoutMs(uint32_t ms) { _bus.setBusyTimeoutMs(ms); }
+  uint32_t busyTimeouts() const { return _bus.busyTimeouts(); }
+
   // Access to frame buffer
   uint8_t* getFrameBuffer() const { return frameBuffer; }
   bool framebufferReady() const { return frameBuffer != nullptr; }

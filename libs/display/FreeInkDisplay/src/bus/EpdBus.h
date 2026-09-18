@@ -94,6 +94,18 @@ class EpdBus {
   // instead of polling, without the SDK knowing the wake mechanics.
   void setBusyWaitSliceHook(bool (*sliceHook)(int8_t busyPin, uint8_t busyLevel)) { _busyWaitSliceHook = sliceHook; }
 
+  // Upper bound for a single BUSY wait, in milliseconds (default 30 s). A
+  // controller whose BUSY line is stuck at the busy level (rail off, latched
+  // up, broken FPC) never releases it, and every command then blocks for the
+  // full bound: with the default that is a 90 s init and a 30 s stall per
+  // frame, which reads as a frozen device. Hosts that know their panel's
+  // longest healthy waveform can lower it. UcIdleHigh ignores it on purpose
+  // (see waitBusy). busyTimeouts() counts the waits that hit the bound since
+  // boot, so host firmware can tell "the panel does not answer" from "slow".
+  void setBusyTimeoutMs(uint32_t ms) { _busyTimeoutMs = ms; }
+  uint32_t busyTimeoutMs() const { return _busyTimeoutMs; }
+  uint32_t busyTimeouts() const { return _busyTimeouts; }
+
   // Send `ramCmd` then `plane` Y-flipped (gate order, bottom row first) as ONE
   // CS-low data burst — required by UC8253 DTM writes which must not toggle CS
   // mid-stream. (cmd uses its own CS pulse, matching the OEM sequence.)
@@ -127,6 +139,9 @@ class EpdBus {
     }
     delay(fallbackDelayMs);
   }
+
+  uint32_t _busyTimeoutMs = 30000;
+  uint32_t _busyTimeouts = 0;
 
   EpdPins _pins{-1, -1, -1, -1, -1, -1};
   SPISettings _spi;

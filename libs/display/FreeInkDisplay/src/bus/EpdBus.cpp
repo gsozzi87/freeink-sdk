@@ -211,6 +211,7 @@ void EpdBus::waitBusy(BusyPolarity p, const char* tag) {
   bool longWait = false;
   bool hookFired = false;
   bool x3SawLow = false;
+  bool timedOut = false;
 
   if (p == BusyPolarity::ActiveHigh) {
     while (digitalRead(_pins.busy) == HIGH) {
@@ -222,7 +223,10 @@ void EpdBus::waitBusy(BusyPolarity p, const char* tag) {
           _busyWaitBeginHook();
         }
       }
-      if (millis() - start > 30000) break;
+      if (millis() - start > _busyTimeoutMs) {
+        timedOut = true;
+        break;
+      }
     }
   } else if (p == BusyPolarity::ActiveLow) {
     bool busy = digitalRead(_pins.busy) == LOW;
@@ -245,7 +249,10 @@ void EpdBus::waitBusy(BusyPolarity p, const char* tag) {
             _busyWaitBeginHook();
           }
         }
-        if (millis() - start > 30000) break;
+        if (millis() - start > _busyTimeoutMs) {
+          timedOut = true;
+          break;
+        }
       } while (digitalRead(_pins.busy) == LOW);
     }
   } else if (p == BusyPolarity::UcIdleHigh) {
@@ -281,11 +288,15 @@ void EpdBus::waitBusy(BusyPolarity p, const char* tag) {
             _busyWaitBeginHook();
           }
         }
-        if (millis() - start > 30000) break;
+        if (millis() - start > _busyTimeoutMs) {
+          timedOut = true;
+          break;
+        }
       }
     }
   }
 
+  if (timedOut) _busyTimeouts++;
   if (hookFired && _busyWaitEndHook != nullptr) _busyWaitEndHook();
   if (p == BusyPolarity::X3TwoPhase && !x3SawLow) return;
 
@@ -308,7 +319,7 @@ void EpdBus::waitRefreshComplete(const char* tag) {
   // never calls it. Bypassing the hook costs that host its power policy (~9% more
   // per refresh, measured ~29 mC vs ~26.5 mC on X3), and is a latent hazard: edge
   // interrupts do not fire during light sleep, so a completion edge taken while the
-  // host is slept would be missed and the wait would stall to its 30 s timeout. The
+  // host is slept would be missed and the wait would stall to its BUSY timeout (30 s by default). The
   // slice hook already delivers GPIO-precise wake, so the ISR path buys these hosts
   // nothing — fall back to the hooked poll.
   if (_busyWaitSliceHook != nullptr) {
@@ -366,7 +377,10 @@ void EpdBus::waitRefreshComplete(const char* tag) {
   const bool hook = (_busyWaitBeginHook != nullptr);
   if (hook) _busyWaitBeginHook();
   while (digitalRead(_pins.busy) != doneLevel) {
-    if (xSemaphoreTake(s_epdRefreshDone, pdMS_TO_TICKS(30000)) != pdTRUE) break;
+    if (xSemaphoreTake(s_epdRefreshDone, pdMS_TO_TICKS(_busyTimeoutMs)) != pdTRUE) {
+      _busyTimeouts++;
+      break;
+    }
   }
   if (hook && _busyWaitEndHook != nullptr) _busyWaitEndHook();
 
