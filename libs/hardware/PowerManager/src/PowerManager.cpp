@@ -165,7 +165,23 @@ void PowerManager::deepSleepUntilPowerButton() {
   if (!armPowerButtonWakeup()) {
     log_e("no button wake armed: falling back to a %u s timer so the device comes back",
           static_cast<unsigned>(WAKE_FALLBACK_MS / 1000));
-    esp_sleep_enable_timer_wakeup(static_cast<uint64_t>(WAKE_FALLBACK_MS) * 1000ULL);
+    // And this return is CHECKED too. Saying "a timer always remains" while
+    // dropping the one value that says whether it was armed guarantees nothing:
+    // the API returns esp_err_t, so it can refuse, and the call right after is
+    // the irreversible one. Deep sleep with no wake source at all is
+    // indistinguishable from a dead device, and the only way back is the
+    // board's hardware escape, if it has one.
+    const esp_err_t err = esp_sleep_enable_timer_wakeup(static_cast<uint64_t>(WAKE_FALLBACK_MS) * 1000ULL);
+    if (err != ESP_OK) {
+      // A restart is recoverable and sleeping without a wake source is not, so
+      // when there is no confirmed source left the device restarts instead. It
+      // comes back on its own, the boot log names the reason, and whatever made
+      // both arms fail gets a fresh chance.
+      log_e("neither the wake button nor the fallback timer could be armed (%s): restarting instead of "
+            "sleeping with no way back",
+            esp_err_to_name(err));
+      esp_restart();
+    }
   }
   deepSleep();
 }
