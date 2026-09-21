@@ -62,7 +62,11 @@ class PowerManager {
   [[noreturn]] static void deepSleep();
 
   // Convenience: wait for release, arm the power-button wakeup, then deep sleep.
-  [[noreturn]] static void deepSleepUntilPowerButton();
+  // `timerAlreadyArmed`: the caller has ALREADY enabled a timer wakeup it needs
+  // (an alarm deadline). Without it this function would reprogram the same
+  // timer with its own 5-minute rescue value when the button cannot be armed,
+  // silently replacing a deadline the caller had confirmed.
+  [[noreturn]] static void deepSleepUntilPowerButton(bool timerAlreadyArmed = false);
 };
 
 }  // namespace freeink

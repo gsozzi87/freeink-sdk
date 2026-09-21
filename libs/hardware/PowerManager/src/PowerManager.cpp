@@ -149,7 +149,7 @@ void PowerManager::deepSleep() {
   }  // esp_deep_sleep_start() does not return; satisfy [[noreturn]]
 }
 
-void PowerManager::deepSleepUntilPowerButton() {
+void PowerManager::deepSleepUntilPowerButton(const bool timerAlreadyArmed) {
   waitForPowerButtonRelease();
   // NEVER sleep without a wake source. The return of armPowerButtonWakeup() used
   // to be dropped on the floor: when the IDF refused the mask (a bad profile, a
@@ -163,6 +163,16 @@ void PowerManager::deepSleepUntilPowerButton() {
   // for its own reasons (an alarm), and that is the lesser evil: a late alarm
   // beats a device that never wakes.
   if (!armPowerButtonWakeup()) {
+    // There is only ONE timer wake source, so arming the rescue timer here
+    // REPLACES whatever deadline the caller already programmed. When the caller
+    // says it has a confirmed timer, that timer is the wake source and this
+    // function must not touch it: overwriting an alarm due in 60 s with a
+    // 5-minute rescue makes the alarm late, on the very path that exists to
+    // make the device more resilient.
+    if (timerAlreadyArmed) {
+      log_e("no button wake armed, but the caller already has a confirmed timer: leaving it alone");
+      deepSleep();
+    }
     log_e("no button wake armed: falling back to a %u s timer so the device comes back",
           static_cast<unsigned>(WAKE_FALLBACK_MS / 1000));
     // And this return is CHECKED too. Saying "a timer always remains" while
