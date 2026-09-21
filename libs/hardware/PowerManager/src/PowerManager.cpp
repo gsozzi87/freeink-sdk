@@ -20,6 +20,14 @@ int8_t PowerManager::wakeSourcePin() {
   return in.wakePin >= 0 ? in.wakePin : in.power;
 }
 
+namespace {
+// How long waitForPowerButtonRelease() waits before giving up on a stuck pin.
+constexpr uint32_t RELEASE_WAIT_MS = 8000;
+// Last-resort wake when no button could be armed. Short enough that the device
+// does not look dead, long enough not to become a boot loop.
+constexpr uint32_t WAKE_FALLBACK_MS = 5 * 60 * 1000;
+}  // namespace
+
 bool PowerManager::armWakeOnPins(uint64_t gpioMask, bool wakeLow) {
   if (gpioMask == 0) return false;
 #if SOC_PM_SUPPORT_EXT1_WAKEUP
@@ -80,7 +88,19 @@ void PowerManager::waitForPowerButtonRelease() {
 
   pinMode(pin, activeHigh ? INPUT_PULLDOWN : INPUT_PULLUP);
   const int pressedLevel = activeHigh ? HIGH : LOW;
+  // Bounded wait. A pin stuck at the pressed level (a jammed button, a shorted
+  // line, a pull that lost its rail) used to hang the whole shutdown here, in a
+  // delay(50) loop with no way out: the device never reached sleep and never
+  // came back to the UI either. Giving up after the timeout is strictly better
+  // than hanging — the worst case is that the device wakes immediately, which
+  // the user can see and act on, instead of looking dead.
+  const uint32_t startedAt = millis();
   while (digitalRead(pin) == pressedLevel) {
+    if (millis() - startedAt >= RELEASE_WAIT_MS) {
+      log_e("wake pin GPIO%d is still at the pressed level after %u ms: sleeping anyway", pin,
+            static_cast<unsigned>(RELEASE_WAIT_MS));
+      return;
+    }
     delay(50);
   }
 }
@@ -131,7 +151,22 @@ void PowerManager::deepSleep() {
 
 void PowerManager::deepSleepUntilPowerButton() {
   waitForPowerButtonRelease();
-  armPowerButtonWakeup();
+  // NEVER sleep without a wake source. The return of armPowerButtonWakeup() used
+  // to be dropped on the floor: when the IDF refused the mask (a bad profile, a
+  // pin that is not an RTC GPIO, a rare failure) the device went to sleep with
+  // nothing able to wake it. From the outside that is indistinguishable from a
+  // dead device, and the only way back is the board's hardware escape, if it has
+  // one.
+  //
+  // A timer needs no GPIO and cannot be refused for pin reasons, so it is the one
+  // source that always remains. It overwrites a timer the caller may have armed
+  // for its own reasons (an alarm), and that is the lesser evil: a late alarm
+  // beats a device that never wakes.
+  if (!armPowerButtonWakeup()) {
+    log_e("no button wake armed: falling back to a %u s timer so the device comes back",
+          static_cast<unsigned>(WAKE_FALLBACK_MS / 1000));
+    esp_sleep_enable_timer_wakeup(static_cast<uint64_t>(WAKE_FALLBACK_MS) * 1000ULL);
+  }
   deepSleep();
 }
 
