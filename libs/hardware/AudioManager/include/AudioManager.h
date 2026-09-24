@@ -94,6 +94,26 @@ class AudioManager {
   // pisar a otro es si ese otro está usándolo de verdad.
   static bool portBusy();
 
+  // REV-090: POLITICA DE TOMA DEL PUERTO, porque `portBusy()` solo no alcanza.
+  //
+  // `UiSound` preguntaba `portBusy()` y, si daba false, seguia hasta
+  // `ensureI2s()` — que le quita el puerto al dueño que encuentre. Entre la
+  // pregunta y la toma hay dos llamadas y un cambio de tarea: si en esa ventana
+  // arrancaba la voz, el microfono o la musica desde el otro nucleo, el clic
+  // terminaba llamando `end()` SOBRE ESE dueño nuevo. O sea que un sonido que
+  // por contrato debia descartarse cortaba una grabacion o una frase. Es un
+  // TOCTOU clasico y no se arregla repreguntando `portBusy()`: hay que
+  // comprobar y tomar en UNA sola operacion.
+  //
+  // Dos politicas explicitas:
+  //  - Preempt (la de siempre): voz, microfono, musica y avisos SI pueden
+  //    quitarle el puerto al que lo tenga. Es lo correcto y esta documentado:
+  //    "los avisos cortan la cancion, porque el I2S es uno solo".
+  //  - TryOnly: `UiSound`. Si el puerto es de otro, `ensureI2s()` devuelve
+  //    false SIN tocarlo y el clic simplemente no suena.
+  enum class PortPolicy : uint8_t { Preempt, TryOnly };
+  void setPortPolicy(const PortPolicy policy) { portPolicy_ = policy; }
+
   // Por qué falló el último beginCapture(). Existe porque log_e() sale por el
   // cable y el log que de verdad se lee en esta placa es el que se sube al
   // servidor (/board/log), y ese lo escribe el consumidor con SU logger: sin
@@ -176,6 +196,16 @@ class AudioManager {
   bool otherOwnsPort() const;
 
   bool begun_ = false;
+  // REV-092: el estado de `playBuffer()`. Vive aca y no en un shared_ptr
+  // porque `std::make_shared` es una allocation obligatoria y con
+  // `-fno-exceptions` un fallo termina en abort(), no en un false. Lo toca solo
+  // la tarea de reproduccion de ESTA instancia, que es una sola por vez.
+  const uint8_t* bufferData_ = nullptr;
+  size_t bufferLen_ = 0;
+  size_t bufferPos_ = 0;
+
+  PortPolicy portPolicy_ = PortPolicy::Preempt;  // REV-090
+
   volatile bool playing_ = false;
   volatile bool stopRequested_ = false;
   volatile bool paused_ = false;

@@ -42,10 +42,9 @@ struct RegVal {
   uint8_t reg, val;
 };
 constexpr RegVal ES8388_INIT[] = {
-    {0x19, 0x04}, {0x01, 0x50}, {0x02, 0x00}, {0x08, 0x00}, {0x04, 0x3e}, {0x00, 0x12},
-    {0x17, 0x18}, {0x18, 0x02}, {0x26, 0x1b}, {0x27, 0x90}, {0x2a, 0x90}, {0x2b, 0x80},
-    {0x2d, 0x00}, {0x1b, 0x00}, {0x1a, 0x00}, {0x03, 0xff}, {0x09, 0x88}, {0x0a, 0xf0},
-    {0x0b, 0x80}, {0x0c, 0x0e}, {0x0d, 0x02}, {0x10, 0x20}, {0x11, 0x20}, {0x2e, 0x1e},
+    {0x19, 0x04}, {0x01, 0x50}, {0x02, 0x00}, {0x08, 0x00}, {0x04, 0x3e}, {0x00, 0x12}, {0x17, 0x18}, {0x18, 0x02},
+    {0x26, 0x1b}, {0x27, 0x90}, {0x2a, 0x90}, {0x2b, 0x80}, {0x2d, 0x00}, {0x1b, 0x00}, {0x1a, 0x00}, {0x03, 0xff},
+    {0x09, 0x88}, {0x0a, 0xf0}, {0x0b, 0x80}, {0x0c, 0x0e}, {0x0d, 0x02}, {0x10, 0x20}, {0x11, 0x20}, {0x2e, 0x1e},
     {0x2f, 0x1e}, {0x30, 0x1e}, {0x31, 0x1e}, {0x04, 0x3c}, {0x19, 0x00},
 };
 
@@ -260,9 +259,9 @@ void AudioManager::codecCapture(bool on) {
 // muestras de 16, así que hasta acá no se pierde nada útil.
 void AudioManager::applyMicGain() {
   if (!BoardConfig::hasCodecMic()) return;
-  constexpr uint8_t SCALE_BASE = 0x04;  // ADC_SCALE de fábrica: +24 dB
-  constexpr uint8_t SCALE_MAX = 0x07;   // tope del campo: +42 dB
-  constexpr uint8_t VOL_BASE = 0xC8;    // ADC_VOLUME del vendor: +4,5 dB
+  constexpr uint8_t SCALE_BASE = 0x04;                                         // ADC_SCALE de fábrica: +24 dB
+  constexpr uint8_t SCALE_MAX = 0x07;                                          // tope del campo: +42 dB
+  constexpr uint8_t VOL_BASE = 0xC8;                                           // ADC_VOLUME del vendor: +4,5 dB
   const int halfDb = static_cast<int>(s_micGain) * MIC_GAIN_MAX_DB * 2 / 100;  // en medios dB
   int coarse = halfDb / 12;  // cada paso de ADC_SCALE son 6 dB = 12 medios dB
   if (coarse > SCALE_MAX - SCALE_BASE) coarse = SCALE_MAX - SCALE_BASE;
@@ -346,9 +345,8 @@ bool AudioManager::parseWavHeader(const WavSource& source, WavInfo& info) {
     pos += size + (size & 1);  // chunks are word-aligned
   }
 
-  return haveFmt && info.dataStart != 0 && info.bitsPerSample == 16 &&
-         (info.channels == 1 || info.channels == 2) && info.sampleRate >= 8000 &&
-         info.sampleRate <= 48000;
+  return haveFmt && info.dataStart != 0 && info.bitsPerSample == 16 && (info.channels == 1 || info.channels == 2) &&
+         info.sampleRate >= 8000 && info.sampleRate <= 48000;
 }
 
 bool AudioManager::ensureI2s(uint32_t sampleRate) {
@@ -392,7 +390,25 @@ bool AudioManager::ensureI2s(uint32_t sampleRate) {
   // i2s_new_channel de abajo tenga con qué. Sin esto, la primera instancia que
   // sonó en toda la sesión se quedaba con I2S_NUM_0 y ninguna otra volvía a
   // conseguirlo: stop() no suelta los canales, sólo end().
+  //
+  // REV-090: y acá se decide la política. Esta comprobación es la ÚNICA que
+  // vale, porque es la que está pegada a la toma: cualquier `portBusy()` que el
+  // llamador haya hecho antes ya es historia. Con TryOnly (los clics de la
+  // interfaz) no se le toca el puerto a nadie: se devuelve false y el sonido se
+  // pierde, que es exactamente lo que el contrato dice que tiene que pasar.
+  //
+  // Sigue sin haber un candado alrededor de `s_portOwner`, y es deliberado:
+  // `end()` espera a que otra tarea termine, y sostener un mutex mientras tanto
+  // es la receta de un bloqueo. Lo que se cierra acá es la ventana que
+  // importaba —preguntar en un lado y pisar en otro—; el peor caso que queda es
+  // que dos instancias PREEMPTIVAS entren a la vez, y ahí `i2s_new_channel`
+  // falla limpio y devuelve false, sin que nadie llame `end()` sobre un dueño
+  // que no le corresponde.
   if (s_portOwner && s_portOwner != this) {
+    if (portPolicy_ == PortPolicy::TryOnly) {
+      log_w("i2s: el puerto es de otro y esta instancia no pisa a nadie: se descarta el sonido");
+      return false;
+    }
     log_w("i2s: el puerto lo tenía otra instancia, se le pide");
     s_portOwner->end();
   }
@@ -410,8 +426,7 @@ bool AudioManager::ensureI2s(uint32_t sampleRate) {
   std.clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(sampleRate);
   std.clk_cfg.mclk_multiple = I2S_MCLK_MULTIPLE_256;
   std.slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO);
-  std.gpio_cfg.mclk = cfg.mclk == BoardConfig::PIN_UNASSIGNED ? I2S_GPIO_UNUSED
-                                                              : (gpio_num_t)cfg.mclk;
+  std.gpio_cfg.mclk = cfg.mclk == BoardConfig::PIN_UNASSIGNED ? I2S_GPIO_UNUSED : (gpio_num_t)cfg.mclk;
   std.gpio_cfg.bclk = (gpio_num_t)cfg.bclk;
   std.gpio_cfg.ws = (gpio_num_t)cfg.lrclk;
   std.gpio_cfg.dout = (gpio_num_t)cfg.dout;
@@ -582,19 +597,33 @@ bool AudioManager::play(const WavSource& source, bool loop) {
 }
 
 bool AudioManager::playBuffer(const uint8_t* data, size_t len, bool loop) {
-  // Shared offset state lives in the lambdas; play() copies them.
-  auto offset = std::make_shared<size_t>(0);
+  // REV-092: esto tenia un `std::make_shared<size_t>(0)` para el offset, y era
+  // una allocation OBLIGATORIA en el camino de un clic.
+  //
+  // El firmware compila con `-fno-exceptions`, asi que un `operator new` que no
+  // puede cumplir NO devuelve null ni lanza: termina en `abort()`. O sea que
+  // bajo heap fragmentado —por WiFi, TLS o el render, que es justo cuando un
+  // sonido accesorio menos deberia poder hacer nada— un pitido podia reiniciar
+  // el aparato. El audio es best effort; no puede ser una fuente de reboot.
+  //
+  // El estado del buffer pasa a vivir en la instancia, que ya existe. Las dos
+  // lambdas capturan UN puntero (`this`), que es lo que se guarda dentro del
+  // propio `std::function` sin reservar nada: sin el shared_ptr no queda
+  // ninguna allocation obligatoria en esta ruta.
+  bufferData_ = data;
+  bufferLen_ = len;
+  bufferPos_ = 0;
   WavSource src;
-  src.read = [data, len, offset](uint8_t* dst, size_t want) -> int {
-    const size_t left = len - *offset;
+  src.read = [this](uint8_t* dst, size_t want) -> int {
+    const size_t left = bufferLen_ - bufferPos_;
     const size_t n = want < left ? want : left;
-    memcpy(dst, data + *offset, n);
-    *offset += n;
+    memcpy(dst, bufferData_ + bufferPos_, n);
+    bufferPos_ += n;
     return (int)n;
   };
-  src.seek = [len, offset](size_t pos) {
-    if (pos > len) return false;
-    *offset = pos;
+  src.seek = [this](size_t pos) {
+    if (pos > bufferLen_) return false;
+    bufferPos_ = pos;
     return true;
   };
   return play(src, loop);
